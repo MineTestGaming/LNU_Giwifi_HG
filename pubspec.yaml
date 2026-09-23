@@ -1,0 +1,29 @@
+name: giwifi_ua_switcher
+description: GiWiFi 校园网一键认证工具（UA 设备切换 + 换绑确认 + 自动二次认证）
+publish_to: 'none'
+version: 1.1.5+8
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.4
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: MiSans
+      fonts:
+        - asset: assets/fonts/mi_sans_regular.ttf
+          weight: 400
+        - asset: assets/fonts/mi_sans_medium.ttf
+          weight: 500
+        - asset: assets/fonts/mi_sans_bold.ttf
+          weight: 700

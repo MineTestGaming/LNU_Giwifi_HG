@@ -1,0 +1,32 @@
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+pubspec.lock
+*.iml
+.idea/
+.vscode/
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+
+# misc
+*.log
+.DS_Store
+# Generated (Windows/Linux/macOS desktop)
+**/ephemeral/
+**/generated_plugins.cmake
+**/generated_plugin_registrant.cc
+**/generated_plugin_registrant.h
+**/generated_config.cmake
+*_log.txt
+
+# .NET Windows lightweight app
+windows-lite/bin/
+windows-lite/obj/
+dist/
+publish/

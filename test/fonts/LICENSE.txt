@@ -1,0 +1,11 @@
+本目录字体仅用于 flutter test 的金色截图测试，不打包进应用。
+
+ui_font.ttf
+  来源：Noto Sans SC（Google Fonts），子集化并实例化为 Regular。
+  版权：Copyright 2014-2022 Adobe (http://www.adobe.com/)，保留原始版权声明。
+  许可：SIL Open Font License 1.1（见 OFL.txt）。
+
+icons.otf
+  来源：MaterialIcons-Regular.otf（Flutter SDK），按 UI 实际使用的图标子集化。
+  版权：Copyright 2014 Google LLC。
+  许可：Apache License 2.0（见 Apache-2.0.txt）。

@@ -1,0 +1,6 @@
+analyzer:
+  exclude:
+    - tool/**
+linter:
+  rules:
+    - prefer_const_constructors

@@ -1,0 +1,46 @@
+name: Apple builds (iOS/macOS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS (unsigned)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package iOS app
+        run: |
+          cd build/ios/iphoneos
+          zip -qry ../../GiWiFi-iOS-unsigned.zip Runner.app
+          cd ../..
+
+      - name: Build macOS
+        run: flutter build macos --release
+
+      - name: Package macOS app
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -qry ../../../../GiWiFi-macOS.zip giwifi_ua_switcher.app
+          cd ../../../../
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-builds
+          path: |
+            build/GiWiFi-iOS-unsigned.zip
+            build/GiWiFi-macOS.zip

@@ -1,0 +1,13 @@
+MiSans Font License
+===================
+
+MiSans is a font designed by Xiaomi (小米) and released for free commercial use.
+Official statement: MiSans 字体免费供全社会使用（含商用）。
+
+Source: https://hyperos.mi.com/font
+Download: https://cdn.cnbj1.fds.api.mi-img.com/vipmlmodel/font/MiSans/MiSans.zip
+
+Weights bundled in this project:
+- mi_sans_regular.ttf (MiSans Regular, w400)
+- mi_sans_medium.ttf  (MiSans Medium, w500)
+- mi_sans_bold.ttf    (MiSans Bold, w700)
