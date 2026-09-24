@@ -40,15 +40,7 @@ jobs:
           path: build/GiWiFi-iOS-unsigned.zip
 
   build-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            arch: intel-x64
-          - runner: macos-15
-            arch: apple-silicon-arm64
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,13 +58,11 @@ jobs:
         run: flutter build macos --release
 
       - name: Package macOS ZIP and DMG
-        env:
-          ARCH_NAME: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           app="build/macos/Build/Products/Release/giwifi_ua_switcher.app"
-          zip="build/GiWiFi-macOS-${ARCH_NAME}.zip"
-          dmg="build/GiWiFi-macOS-${ARCH_NAME}.dmg"
+          zip="build/GiWiFi-macOS-universal.zip"
+          dmg="build/GiWiFi-macOS-universal.dmg"
           zip -qry "$zip" "$app"
           rm -rf build/dmg-root
           mkdir -p build/dmg-root
@@ -83,10 +73,10 @@ jobs:
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos-universal
           path: |
-            build/GiWiFi-macOS-${{ matrix.arch }}.zip
-            build/GiWiFi-macOS-${{ matrix.arch }}.dmg
+            build/GiWiFi-macOS-universal.zip
+            build/GiWiFi-macOS-universal.dmg
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

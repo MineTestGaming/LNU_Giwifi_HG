@@ -15,12 +15,11 @@
 
 轻量版使用 Windows Forms 和 .NET 自带的 HTTP、Cookie、AES 能力，不依赖 Flutter、WebView 或第三方 NuGet 包。它是 Windows 桌面版本，不提供 Android/iOS 支持。
 
-macOS 版本继续使用 Flutter 原版认证逻辑，支持 Intel 和 Apple Silicon 两种架构。仓库已配置 GitHub Actions，可在 Actions 页面手动运行 `Apple builds`，或推送 `v*` 标签自动构建并创建 Release，生成 `.dmg` 和 `.zip` 安装包。
+macOS 版本继续使用 Flutter 原版认证逻辑，发布包为同时支持 Intel 和 Apple Silicon 的 universal binary。仓库已配置 GitHub Actions，可在 Actions 页面手动运行 `Apple builds`，或推送 `v*` 标签自动构建并创建 Release，生成 `.dmg` 和 `.zip` 安装包。
 
 macOS 安装包构建完成后，可在对应的 workflow artifacts 中下载：
 
-- `GiWiFi-macOS-intel-x64.dmg`：Intel Mac
-- `GiWiFi-macOS-apple-silicon-arm64.dmg`：Apple Silicon Mac（M 系列）
+- `GiWiFi-macOS-universal.dmg`：Intel Mac 与 Apple Silicon Mac（M 系列）通用
 
 目前未配置 Apple Developer 签名与公证，因此首次打开时，macOS 可能需要在“系统设置 → 隐私与安全性”中手动允许打开。
 
