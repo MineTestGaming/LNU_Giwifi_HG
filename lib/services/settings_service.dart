@@ -42,6 +42,7 @@ class SettingsService {
   static const String kUsername = 'username';
   static const String kPassword = 'password';
   static const String kServerUrl = 'server_url';
+  static const String kWlanAcName = 'wlan_ac_name';
   static const String kProfileId = 'profile_id';
   static const String kCustomUa = 'custom_ua';
   static const String kRemember = 'remember';
@@ -91,6 +92,7 @@ class SettingsService {
     required String username,
     required String password,
     required String serverUrl,
+    String wlanAcName = 'GiWiFi_lnsfHG',
     required String profileId,
     required String customUa,
     required bool remember,
@@ -104,6 +106,7 @@ class SettingsService {
       data.remove(kPassword);
     }
     data[kServerUrl] = serverUrl;
+    data[kWlanAcName] = wlanAcName;
     data[kProfileId] = profileId;
     data[kCustomUa] = customUa;
     data[kRemember] = remember;
@@ -116,6 +119,7 @@ class SettingsService {
       kUsername: data[kUsername] as String? ?? '',
       kPassword: data[kPassword] as String? ?? '',
       kServerUrl: data[kServerUrl] as String? ?? 'http://100.100.9.2',
+      kWlanAcName: data[kWlanAcName] as String? ?? 'GiWiFi_lnsfHG',
       kProfileId: data[kProfileId] as String? ?? 'pc',
       kCustomUa: data[kCustomUa] as String? ?? '',
       kRemember: data[kRemember] as bool? ?? true,

@@ -10,7 +10,7 @@ import '../services/settings_service.dart';
 import '../theme.dart';
 
 /// 项目仓库地址（右上角入口按钮跳转）。
-const String kRepoUrl = 'https://github.com/Yanmo552/giwifi-ua-switcher';
+const String kRepoUrl = 'https://github.com/Eternite-0/LNU_Giwifi_HG';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -24,6 +24,9 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _passwordCtrl = TextEditingController();
   final TextEditingController _serverCtrl = TextEditingController(
     text: 'http://100.100.9.2',
+  );
+  final TextEditingController _acNameCtrl = TextEditingController(
+    text: 'GiWiFi_lnsfHG',
   );
   final TextEditingController _customUaCtrl = TextEditingController();
 
@@ -42,7 +45,10 @@ class _HomePageState extends State<HomePage> {
   Timer? _keepAliveTimer;
   AuthService? _activeAuth;
 
-  AuthService get _auth => AuthService(baseUrl: _serverCtrl.text.trim());
+  AuthService get _auth => AuthService(
+        baseUrl: _serverCtrl.text.trim(),
+        wlanAcName: _acNameCtrl.text.trim(),
+      );
 
   @override
   void initState() {
@@ -57,6 +63,7 @@ class _HomePageState extends State<HomePage> {
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _serverCtrl.dispose();
+    _acNameCtrl.dispose();
     _customUaCtrl.dispose();
     super.dispose();
   }
@@ -81,6 +88,7 @@ class _HomePageState extends State<HomePage> {
       _usernameCtrl.text = s[SettingsService.kUsername] as String;
       _passwordCtrl.text = s[SettingsService.kPassword] as String;
       _serverCtrl.text = s[SettingsService.kServerUrl] as String;
+      _acNameCtrl.text = s[SettingsService.kWlanAcName] as String;
       _profileId = s[SettingsService.kProfileId] as String;
       _customUaCtrl.text = s[SettingsService.kCustomUa] as String;
       _remember = s[SettingsService.kRemember] as bool;
@@ -94,6 +102,7 @@ class _HomePageState extends State<HomePage> {
         username: _usernameCtrl.text.trim(),
         password: _passwordCtrl.text,
         serverUrl: _serverCtrl.text.trim(),
+        wlanAcName: _acNameCtrl.text.trim(),
         profileId: _profileId,
         customUa: _customUaCtrl.text.trim(),
         remember: _remember,
@@ -761,6 +770,15 @@ class _HomePageState extends State<HomePage> {
                 labelText: '认证服务器地址',
                 hintText: 'http://100.100.9.2',
                 prefixIcon: Icon(Icons.dns_outlined),
+              ),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _acNameCtrl,
+              decoration: const InputDecoration(
+                labelText: '校园 AC 名称（wlanacname）',
+                hintText: 'GiWiFi_lnsfHG',
+                prefixIcon: Icon(Icons.router_outlined),
               ),
             ),
             const SizedBox(height: 6),

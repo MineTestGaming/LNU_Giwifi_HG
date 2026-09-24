@@ -71,6 +71,7 @@ enum OnlineStatus { online, offline, unknown }
 class AuthService {
   AuthService({
     this.baseUrl = 'http://100.100.9.2',
+    this.wlanAcName = 'GiWiFi_lnsfHG',
     this.timeout = const Duration(seconds: 10),
     this.rebindCooldown = const Duration(seconds: 6),
     this.portalCooldown = const Duration(seconds: 6),
@@ -78,6 +79,7 @@ class AuthService {
   });
 
   final String baseUrl;
+  final String wlanAcName;
   final Duration timeout;
 
   /// 提交换绑后、再次认证前的冷却时间（门户页大约 6 秒后允许再次点击）。
@@ -477,7 +479,10 @@ class AuthService {
   /// 这里按浏览器最终行为依次尝试，只认带密码框的登录表单页；
   /// 连接失败时再带通用 wlan 参数重试一次。
   Future<String> fetchLoginPage(String userAgent) async {
+    final acName = Uri.encodeQueryComponent(wlanAcName.trim());
     final urls = <String>[
+      '$baseUrl$kLoginPath?wlanacname=$acName',
+      '$baseUrl$kLoginPath?wlanacname=$acName&is_mobile=1&pagetype=login&logintype=1',
       '$baseUrl$kLoginPath',
       '$baseUrl$kLoginPath?is_mobile=1&pagetype=login&logintype=1',
       '$baseUrl$kLoginPath?wlanuserip=10.0.0.1&wlanacname=GiWiFi',

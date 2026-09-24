@@ -1,10 +1,16 @@
-name: Apple builds (iOS/macOS)
+name: Apple builds
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-ios:
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -26,21 +32,75 @@ jobs:
         run: |
           cd build/ios/iphoneos
           zip -qry ../../GiWiFi-iOS-unsigned.zip Runner.app
-          cd ../..
 
-      - name: Build macOS
-        run: flutter build macos --release
-
-      - name: Package macOS app
-        run: |
-          cd build/macos/Build/Products/Release
-          zip -qry ../../../../GiWiFi-macOS.zip giwifi_ua_switcher.app
-          cd ../../../../
-
-      - name: Upload artifacts
+      - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apple-builds
+          name: ios-unsigned
+          path: build/GiWiFi-iOS-unsigned.zip
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: intel-x64
+          - runner: macos-15
+            arch: apple-silicon-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build macOS app
+        run: flutter build macos --release
+
+      - name: Package macOS ZIP and DMG
+        env:
+          ARCH_NAME: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          app="build/macos/Build/Products/Release/giwifi_ua_switcher.app"
+          zip="build/GiWiFi-macOS-${ARCH_NAME}.zip"
+          dmg="build/GiWiFi-macOS-${ARCH_NAME}.dmg"
+          zip -qry "$zip" "$app"
+          rm -rf build/dmg-root
+          mkdir -p build/dmg-root
+          cp -R "$app" build/dmg-root/
+          ln -s /Applications build/dmg-root/Applications
+          hdiutil create -volname "GiWiFi" -srcfolder build/dmg-root -ov -format UDZO "$dmg"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
           path: |
-            build/GiWiFi-iOS-unsigned.zip
-            build/GiWiFi-macOS.zip
+            build/GiWiFi-macOS-${{ matrix.arch }}.zip
+            build/GiWiFi-macOS-${{ matrix.arch }}.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-ios, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
