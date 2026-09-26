@@ -39,13 +39,20 @@ internal sealed class AuthClient : IDisposable
     private readonly CancellationToken _ct;
     private string _baseUrl;
     private readonly string _wlanAcName;
+    private readonly NetworkAdapter? _networkAdapter;
 
-    public AuthClient(string baseUrl, CancellationToken ct, string wlanAcName = "GiWiFi_lnsfHG")
+    public AuthClient(string baseUrl, CancellationToken ct, string wlanAcName = "GiWiFi_lnsfHG", string networkAdapterId = "", string networkAddress = "")
     {
         _baseUrl = NormalizeBaseUrl(baseUrl);
         _wlanAcName = wlanAcName.Trim();
         _ct = ct;
-        var handler = new HttpClientHandler { CookieContainer = _cookies, UseCookies = true, AllowAutoRedirect = true, MaxAutomaticRedirections = 5 };
+        _networkAdapter = string.IsNullOrEmpty(networkAdapterId) ? null : NetworkAdapter.Resolve(networkAdapterId, networkAddress, NetworkAdapter.ListAvailable());
+        var handler = new SocketsHttpHandler { CookieContainer = _cookies, UseCookies = true, AllowAutoRedirect = true, MaxAutomaticRedirections = 5 };
+        if (_networkAdapter is not null)
+        {
+            handler.UseProxy = false;
+            handler.ConnectCallback = _networkAdapter.ConnectAsync;
+        }
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
     }
 
@@ -168,8 +175,10 @@ internal sealed class AuthClient : IDisposable
 
     public async Task<PortalStatus> CheckOnlineAsync(string ua)
     {
+        _networkAdapter?.Validate();
         try { var html = await GetTextAsync(_baseUrl + LogoutPath, ua); return HasNamedInput(html, "si") ? PortalStatus.Online : HasPasswordInput(html) ? PortalStatus.Offline : PortalStatus.Unknown; }
         catch (OperationCanceledException) { throw; }
+        catch (InvalidOperationException) { throw; }
         catch { return PortalStatus.Unknown; }
     }
 
@@ -244,6 +253,8 @@ internal sealed class AuthClient : IDisposable
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string ua, string? body = null)
     {
+        _ct.ThrowIfCancellationRequested();
+        _networkAdapter?.Validate();
         using var request = new HttpRequestMessage(method, url);
         request.Headers.TryAddWithoutValidation("User-Agent", ua);
         request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");

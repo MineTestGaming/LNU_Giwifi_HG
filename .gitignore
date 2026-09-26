@@ -28,5 +28,7 @@ android/key.properties
 # .NET Windows lightweight app
 windows-lite/bin/
 windows-lite/obj/
+windows-lite-tests/bin/
+windows-lite-tests/obj/
 dist/
 publish/

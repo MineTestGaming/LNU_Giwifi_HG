@@ -9,6 +9,8 @@ internal sealed class MainForm : Form
     private readonly TextBox _server = new() { Text = "http://100.100.9.2", Dock = DockStyle.Fill };
     private readonly TextBox _acName = new() { Text = "GiWiFi_lnsfHG", Dock = DockStyle.Fill };
     private readonly ComboBox _profile = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly ComboBox _adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, DropDownWidth = 480 };
+    private readonly Button _refreshAdapters = new() { Text = "刷新", Dock = DockStyle.Fill };
     private readonly TextBox _customUa = new() { PlaceholderText = "仅自定义模式填写", Dock = DockStyle.Fill };
     private readonly CheckBox _remember = new() { Text = "在本机记住账号密码", Checked = true, AutoSize = true };
     private readonly CheckBox _autoReconnect = new() { Text = "掉线后自动重连（每 60 秒检查）", AutoSize = true };
@@ -21,15 +23,18 @@ internal sealed class MainForm : Form
     private CancellationTokenSource? _activeCts;
     private bool _busy;
     private bool _checking;
+    private bool _loadingSettings = true;
+    private bool _refreshingAdapters;
     private List<LogEntry> _entries = [];
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public MainForm()
+    public MainForm(string? settingsPath = null)
     {
+        if (settingsPath is not null) _settingsPath = settingsPath;
         Text = "GiWiFi 轻量认证工具";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(470, 590);
-        ClientSize = new Size(540, 750);
+        MinimumSize = new Size(540, 730);
+        ClientSize = new Size(600, 800);
         Font = new Font("Microsoft YaHei UI", 9.5f);
         _customUa.Enabled = false;
         BackColor = Color.FromArgb(247, 249, 248);
@@ -37,20 +42,32 @@ internal sealed class MainForm : Form
         _profile.Items.AddRange(DeviceProfile.Presets.Cast<object>().ToArray());
         _profile.SelectedIndex = 0;
         _profile.SelectedIndexChanged += (_, _) => _customUa.Enabled = _profile.SelectedItem is DeviceProfile { Id: "custom" };
-        _login.Click += async (_, _) => { if (_busy) { _activeCts?.Cancel(); return; } await DoLoginAsync(); };
+        _login.Click += async (_, _) => { if (_busy) { _activeCts?.Cancel(); return; } if (!_checking) await DoLoginAsync(); };
         _check.Click += async (_, _) => await CheckOnlineAsync();
         _autoReconnect.CheckedChanged += (_, _) => _reconnectTimer.Enabled = _autoReconnect.Checked;
         _reconnectTimer.Tick += async (_, _) => await KeepAliveTickAsync();
         _remember.CheckedChanged += (_, _) => SaveSettings();
+        _adapter.Items.Add(NetworkAdapter.SystemDefault);
+        _adapter.SelectedIndex = 0;
         LoadSettings();
-        FormClosing += (_, _) => { _activeCts?.Cancel(); SaveSettings(); };
+        RefreshAdapters();
+        _loadingSettings = false;
+        _refreshAdapters.Click += (_, _) => RefreshAdapters();
+        _adapter.SelectedIndexChanged += (_, _) =>
+        {
+            if (_refreshingAdapters) return;
+            _status.Text = $"已选择 {SelectedAdapter}；请重新检查在线状态或认证。";
+            _status.ForeColor = Color.FromArgb(75, 85, 99);
+            SaveSettings();
+        };
+        FormClosing += (_, _) => { _reconnectTimer.Stop(); _activeCts?.Cancel(); SaveSettings(); };
     }
 
     private void BuildUi()
     {
         var page = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 18), ColumnCount = 1, RowCount = 6 };
         page.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
-        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 350));
+        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 398));
         page.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         page.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         page.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
@@ -62,9 +79,9 @@ internal sealed class MainForm : Form
         var subtitle = new Label { Text = "岭南师范学院 · 设备类型切换与一键认证", AutoSize = true, ForeColor = Color.FromArgb(100, 110, 107), Location = new Point(2, 47) };
         header.Controls.Add(title); header.Controls.Add(subtitle); page.Controls.Add(header, 0, 0);
 
-        var form = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 9, Padding = new Padding(16), BackColor = Color.White, Margin = new Padding(0, 5, 0, 10) };
+        var form = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 10, Padding = new Padding(16), BackColor = Color.White, Margin = new Padding(0, 5, 0, 10) };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112)); form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 6; i++) form.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        for (var i = 0; i < 7; i++) form.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         form.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         form.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         form.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
@@ -74,9 +91,16 @@ internal sealed class MainForm : Form
         AddField(form, 3, "自定义 UA", _customUa);
         AddField(form, 4, "认证服务器", _server);
         AddField(form, 5, "校园 AC 名称", _acName);
-        form.Controls.Add(_remember, 1, 6); form.Controls.Add(_autoReconnect, 1, 7);
+        var adapterRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        _adapter.Margin = Padding.Empty;
+        _refreshAdapters.Margin = new Padding(4, 0, 0, 0);
+        adapterRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        adapterRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60));
+        adapterRow.Controls.Add(_adapter, 0, 0); adapterRow.Controls.Add(_refreshAdapters, 1, 0);
+        AddField(form, 6, "认证网卡", adapterRow);
+        form.Controls.Add(_remember, 1, 7); form.Controls.Add(_autoReconnect, 1, 8);
         var note = new Label { Text = "账号密码仅在勾选时保存在本机 AppData 配置中。", AutoSize = true, ForeColor = Color.Gray, Anchor = AnchorStyles.Left };
-        form.Controls.Add(note, 1, 8);
+        form.Controls.Add(note, 1, 9);
         page.Controls.Add(form, 0, 1);
 
         page.Controls.Add(_login, 0, 2);
@@ -106,6 +130,49 @@ internal sealed class MainForm : Form
         return profile.Id == "custom" ? _customUa.Text.Trim() : profile.UserAgent;
     }
 
+    private NetworkAdapter SelectedAdapter => _adapter.SelectedItem as NetworkAdapter ?? NetworkAdapter.SystemDefault;
+
+    private void RefreshAdapters()
+    {
+        if (_busy || _checking) return;
+        var previous = SelectedAdapter;
+        try
+        {
+            var available = NetworkAdapter.ListAvailable();
+            var selected = previous.Id.Length == 0 ? NetworkAdapter.SystemDefault
+                : available.FirstOrDefault(a => a.Id == previous.Id && a.Address == previous.Address)
+                    ?? available.FirstOrDefault(a => a.Id == previous.Id)
+                    ?? previous with { InterfaceIndex = -1 };
+            _refreshingAdapters = true;
+            _adapter.Items.Clear();
+            _adapter.Items.Add(NetworkAdapter.SystemDefault);
+            _adapter.Items.AddRange(available.Cast<object>().ToArray());
+            if (selected.InterfaceIndex < 0) _adapter.Items.Add(selected);
+            _adapter.SelectedItem = selected;
+            _status.Text = selected.InterfaceIndex < 0 ? "所选网卡不可用，请连接后刷新或手动选择其他网卡。" : $"当前认证网卡：{selected}；待检查。";
+            _status.ForeColor = selected.InterfaceIndex < 0 ? Color.Firebrick : Color.FromArgb(75, 85, 99);
+            SaveSettings();
+        }
+        catch (Exception ex) { _status.Text = "刷新网卡失败：" + ex.Message; }
+        finally { _refreshingAdapters = false; }
+    }
+
+    private AuthClient CreateClient(CancellationToken ct)
+    {
+        var adapter = SelectedAdapter;
+        return new AuthClient(_server.Text, ct, _acName.Text, adapter.Id, adapter.Address);
+    }
+
+    private void UpdateOperationControls()
+    {
+        var idle = !_busy && !_checking;
+        foreach (var control in new Control[] { _adapter, _refreshAdapters, _profile, _server, _acName, _username, _password }) control.Enabled = idle;
+        _customUa.Enabled = idle && _profile.SelectedItem is DeviceProfile { Id: "custom" };
+        _check.Enabled = idle;
+        _login.Enabled = _busy || !_checking;
+        _login.Text = _busy ? "停止认证" : "一键认证";
+    }
+
     private async Task DoLoginAsync()
     {
         var username = _username.Text.Trim();
@@ -116,10 +183,11 @@ internal sealed class MainForm : Form
         SaveSettings();
         _busy = true; _login.Text = "停止认证"; _status.ForeColor = Color.FromArgb(30, 90, 78);
         _activeCts = new CancellationTokenSource();
+        UpdateOperationControls();
         LoginResult result;
         try
         {
-            using var client = new AuthClient(_server.Text, _activeCts.Token, _acName.Text);
+            using var client = CreateClient(_activeCts.Token);
             result = await client.LoginAsync(username, password, ua,
                 info => MessageBox.Show(this, info, "确认更换绑定设备", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK,
                 () => MessageBox.Show(this, "当前设备已在线。是否先下线，再按所选设备类型重新认证？", "当前设备已在线", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes,
@@ -127,44 +195,49 @@ internal sealed class MainForm : Form
         }
         catch (OperationCanceledException) { result = new(false, "认证已停止"); }
         catch (Exception ex) { result = new(false, FriendlyError(ex)); }
-        finally { _busy = false; _login.Text = "一键认证"; _activeCts?.Dispose(); _activeCts = null; }
+        finally { _busy = false; _activeCts?.Dispose(); _activeCts = null; UpdateOperationControls(); }
         _status.Text = result.Message;
         _status.ForeColor = result.Success ? Color.FromArgb(22, 125, 79) : Color.FromArgb(172, 54, 49);
-        var label = (_profile.SelectedItem as DeviceProfile)?.Label ?? "设备";
+        var label = $"{(_profile.SelectedItem as DeviceProfile)?.Label ?? "设备"} / {SelectedAdapter}";
         _entries.Insert(0, new(DateTime.Now, label, result.Success, result.Message));
         _entries = _entries.Take(50).ToList(); RenderLogs(); SaveSettings();
     }
 
     private async Task CheckOnlineAsync()
     {
+        if (_busy || _checking) return;
         var ua = CurrentUserAgent();
         if (ua.Length == 0) { _status.Text = "请先选择有效的设备 User-Agent"; return; }
         _checking = true; _check.Enabled = false; _status.Text = "正在检查在线状态…";
+        UpdateOperationControls();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        _activeCts = cts;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            using var client = new AuthClient(_server.Text, cts.Token, _acName.Text);
+            using var client = CreateClient(cts.Token);
             var state = await client.CheckOnlineAsync(ua);
             _status.Text = state switch { PortalStatus.Online => "当前设备已在线", PortalStatus.Offline => "当前设备未认证（离线）", _ => "状态未知（请确认已连接校园网）" };
             _status.ForeColor = state == PortalStatus.Online ? Color.FromArgb(22, 125, 79) : Color.FromArgb(90, 100, 97);
         }
         catch (Exception ex) { _status.Text = FriendlyError(ex); _status.ForeColor = Color.Firebrick; }
-        finally { _checking = false; _check.Enabled = true; }
+        finally { _activeCts = null; _checking = false; UpdateOperationControls(); }
     }
 
     private async Task KeepAliveTickAsync()
     {
         if (_busy || _checking) return;
         _checking = true;
+        UpdateOperationControls();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        _activeCts = cts;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            using var client = new AuthClient(_server.Text, cts.Token, _acName.Text);
+            using var client = CreateClient(cts.Token);
             var state = await client.CheckOnlineAsync(CurrentUserAgent());
             if (state == PortalStatus.Offline) { _status.Text = "检测到掉线，正在自动重连…"; await DoLoginAsync(); }
         }
-        catch { }
-        finally { _checking = false; }
+        catch (Exception ex) { _status.Text = FriendlyError(ex); _status.ForeColor = Color.Firebrick; }
+        finally { _activeCts = null; _checking = false; UpdateOperationControls(); }
     }
 
     private void LoadSettings()
@@ -177,6 +250,12 @@ internal sealed class MainForm : Form
             string GetString(string key, string fallback = "") => root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
             _username.Text = GetString("username"); _password.Text = GetString("password");
             _server.Text = GetString("server_url", "http://100.100.9.2"); _customUa.Text = GetString("custom_ua"); _acName.Text = GetString("wlan_ac_name", "GiWiFi_lnsfHG");
+            var adapterId = GetString("network_adapter_id");
+            if (adapterId.Length > 0)
+            {
+                var savedAdapter = new NetworkAdapter(adapterId, GetString("network_adapter_name", "已保存的网卡"), GetString("network_adapter_address"), -1);
+                _adapter.Items.Add(savedAdapter); _adapter.SelectedItem = savedAdapter;
+            }
             _remember.Checked = !root.TryGetProperty("remember", out var r) || r.ValueKind != JsonValueKind.False;
             var profileId = GetString("profile_id", "pc");
             var index = Array.FindIndex(DeviceProfile.Presets, p => p.Id == profileId);
@@ -191,13 +270,18 @@ internal sealed class MainForm : Form
 
     private void SaveSettings()
     {
+        if (_loadingSettings) return;
         try
         {
             var directory = Path.GetDirectoryName(_settingsPath)!;
             Directory.CreateDirectory(directory);
             var profile = _profile.SelectedItem as DeviceProfile ?? DeviceProfile.Presets[0];
             var settings = new Settings(_remember.Checked ? _username.Text.Trim() : "", _remember.Checked ? _password.Text : "", AuthClient.NormalizeBaseUrl(_server.Text), profile.Id, _customUa.Text, _acName.Text.Trim(), _remember.Checked, _autoReconnect.Checked, _entries.Select(e => new StoredLog(new DateTimeOffset(e.Time).ToUnixTimeMilliseconds(), e.Device, e.Success, e.Message)).ToList());
-            File.WriteAllText(_settingsPath, JsonSerializer.Serialize((Dictionary<string, object?>)settings, JsonOptions));
+            Dictionary<string, object?> values = settings;
+            values["network_adapter_id"] = SelectedAdapter.Id;
+            values["network_adapter_name"] = SelectedAdapter.Name;
+            values["network_adapter_address"] = SelectedAdapter.Address;
+            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(values, JsonOptions));
         }
         catch { }
     }
@@ -211,7 +295,7 @@ internal sealed class MainForm : Form
 
     private static string FriendlyError(Exception ex) => ex switch
     {
-        HttpRequestException => "连接认证服务器失败，请确认校园 Wi-Fi 已连接，且服务器地址正确。",
+        HttpRequestException => "当前认证网卡连接服务器失败，请确认所选网卡已连接校园网、IPv4 地址未变化且服务器地址正确。",
         TaskCanceledException => "请求超时，请确认已连接校园 Wi-Fi 后重试。",
         _ => ex.Message
     };
