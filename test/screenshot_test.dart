@@ -8,34 +8,27 @@ import 'package:giwifi_ua_switcher/pages/home_page.dart';
 import 'package:giwifi_ua_switcher/services/settings_service.dart';
 import 'package:giwifi_ua_switcher/theme.dart';
 
-/// 加载子集化的真实字体（Noto Sans SC + MaterialIcons），
-/// 保证金色截图里中文与图标按真实样式渲染。
+/// 使用应用真实字体与完整图标字体，避免新增字符和图标在截图中缺失。
 Future<void> _loadUiFonts() async {
-  final uiBytes = File('test/fonts/ui_font.ttf').readAsBytesSync();
-  final uiLoader = FontLoader('UiTestFont')
-    ..addFont(Future<ByteData>.value(uiBytes.buffer.asByteData()));
+  final uiLoader = FontLoader('MiSans')
+    ..addFont(rootBundle.load('assets/fonts/mi_sans_regular.ttf'))
+    ..addFont(rootBundle.load('assets/fonts/mi_sans_medium.ttf'))
+    ..addFont(rootBundle.load('assets/fonts/mi_sans_bold.ttf'));
   await uiLoader.load();
-  final iconBytes = File('test/fonts/icons.otf').readAsBytesSync();
   final iconLoader = FontLoader('MaterialIcons')
-    ..addFont(Future<ByteData>.value(iconBytes.buffer.asByteData()));
+    ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
   await iconLoader.load();
 }
 
-ThemeData _withUiFont(ThemeData base) {
-  return base.copyWith(
-    textTheme: base.textTheme.apply(fontFamily: 'UiTestFont'),
-    primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'UiTestFont'),
-  );
-}
-
-Future<void> _pumpApp(WidgetTester tester, Size size) async {
+Future<void> _pumpApp(WidgetTester tester, Size size,
+    {Brightness brightness = Brightness.light}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: _withUiFont(buildGiWiFiTheme()),
+      theme: buildGiWiFiTheme(brightness),
       home: const HomePage(),
     ),
   );
@@ -76,6 +69,14 @@ void main() {
     await expectLater(
       find.byType(HomePage),
       matchesGoldenFile('goldens/home_mobile.png'),
+    );
+  });
+
+  testWidgets('深色手机窗口截图', (WidgetTester tester) async {
+    await _pumpApp(tester, const Size(420, 920), brightness: Brightness.dark);
+    await expectLater(
+      find.byType(HomePage),
+      matchesGoldenFile('goldens/home_mobile_dark.png'),
     );
   });
 }

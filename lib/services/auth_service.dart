@@ -5,6 +5,7 @@ import 'dart:io';
 import '../utils/aes_crypto.dart';
 import '../utils/form_builder.dart';
 import '../utils/html_parser.dart';
+import 'network_adapter_service.dart';
 
 /// 认证结果
 class LoginResult {
@@ -76,11 +77,16 @@ class AuthService {
     this.rebindCooldown = const Duration(seconds: 6),
     this.portalCooldown = const Duration(seconds: 6),
     this.verifyInterval = const Duration(seconds: 2),
+    this.networkAdapter,
+    this.networkAdapters = const NetworkAdapterService(),
   });
 
   final String baseUrl;
   final String wlanAcName;
   final Duration timeout;
+  final NetworkAdapter? networkAdapter;
+  final NetworkAdapterService networkAdapters;
+  final Set<ConnectionTask<Socket>> _connections = {};
 
   /// 提交换绑后、再次认证前的冷却时间（门户页大约 6 秒后允许再次点击）。
   final Duration rebindCooldown;
@@ -105,10 +111,46 @@ class AuthService {
   /// 中断当前认证流程。关闭 socket 后 Android 上也能立即返回。
   void cancel() {
     _cancelled = true;
+    for (final connection in _connections) {
+      connection.cancel();
+    }
+    _connections.clear();
     _activeClient?.close(force: true);
     _activeClient = null;
     _session?.close(force: true);
     _session = null;
+  }
+
+  void dispose() => cancel();
+
+  Future<void> _validateNetwork() async {
+    _checkCancelled();
+    if (networkAdapter != null) {
+      await networkAdapters.validate(networkAdapter!).timeout(timeout);
+      _checkCancelled();
+    }
+  }
+
+  HttpClient _createClient() {
+    final client = HttpClient()..connectionTimeout = timeout;
+    if (networkAdapter != null) {
+      client.findProxy = (_) => 'DIRECT';
+      client.connectionFactory = (uri, proxyHost, proxyPort) async {
+        await _validateNetwork();
+        final task = await Socket.startConnect(uri.host, uri.port,
+            sourceAddress: InternetAddress(networkAdapter!.address));
+        _connections.add(task);
+        unawaited(task.socket.then<void>((socket) {
+          _connections.remove(task);
+          if (_cancelled) socket.destroy();
+        }, onError: (Object error, StackTrace stack) {
+          _connections.remove(task);
+        }));
+        if (_cancelled) task.cancel();
+        return task;
+      };
+    }
+    return client;
   }
 
   void _checkCancelled() {
@@ -116,7 +158,7 @@ class AuthService {
   }
 
   /// 整个认证流程期间复用的会话客户端（自动携带 Cookie）。
-  HttpClient get _client => _session ??= HttpClient();
+  HttpClient get _client => _session ??= _createClient();
 
   /// 相对路径/绝对 URL 统一解析。
   String _abs(String pathOrUrl) =>
@@ -137,7 +179,8 @@ class AuthService {
   }) async {
     _cancelled = false;
     _session?.close(force: true);
-    _session = HttpClient();
+    _session = _createClient();
+    await _validateNetwork();
 
     void report(String status) {
       try {
@@ -195,9 +238,7 @@ class AuthService {
           );
         }
         final duration = await _fetchOnlineDuration(userAgent);
-        final message = duration != null
-            ? '认证成功，当前在线时长 $duration'
-            : '认证成功';
+        final message = duration != null ? '认证成功，当前在线时长 $duration' : '认证成功';
         return LoginResult(
           success: true,
           message: message,
@@ -509,12 +550,18 @@ class AuthService {
   /// 登录页在 PC 端无论在线与否都渲染表单，不能作为依据；
   /// 以 logout 页是否下发 si 为准确信号。
   Future<OnlineStatus> checkOnline(String userAgent) async {
+    await _validateNetwork();
     try {
       final html = await _getText('$baseUrl$kLogoutPath', userAgent);
       if (_hasSiInput(html)) return OnlineStatus.online;
       if (_hasPasswordInput(html)) return OnlineStatus.offline;
       return OnlineStatus.unknown;
+    } on NetworkAdapterUnavailableException {
+      rethrow;
+    } on AuthCancelledException {
+      rethrow;
     } catch (_) {
+      _checkCancelled();
       return OnlineStatus.unknown;
     }
   }
@@ -522,6 +569,7 @@ class AuthService {
   /// 注销当前在线设备（取 logout 页的 si 后 POST logoutAction）。
   /// 返回 true 表示门户确认“下线成功”（status=1）。
   Future<bool> logout(String userAgent) async {
+    await _validateNetwork();
     try {
       final html = await _getText('$baseUrl$kLogoutPath', userAgent);
       final hidden = parseHiddenInputs(html);
@@ -548,7 +596,7 @@ class AuthService {
   }) async {
     var current = url;
     for (var hop = 0; hop <= maxRedirects; hop++) {
-      _checkCancelled();
+      await _validateNetwork();
       final client = _client;
       _activeClient = client;
       final req = await client.getUrl(Uri.parse(current)).timeout(timeout);
@@ -588,7 +636,7 @@ class AuthService {
     var payload = body;
     var useGet = false;
     for (var hop = 0; hop <= maxRedirects; hop++) {
-      _checkCancelled();
+      await _validateNetwork();
       final client = _client;
       _activeClient = client;
       final uri = Uri.parse(current);
@@ -639,7 +687,6 @@ class AuthService {
         r'type\s*=\s*["\x27]?password',
         caseSensitive: false,
       ).hasMatch(html);
-
 }
 
 /// 在线复核结果（仅本文件内部使用）。

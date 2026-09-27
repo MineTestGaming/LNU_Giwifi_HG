@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'network_adapter_service.dart';
+
 /// 一次认证操作的日志条目
 class LogEntry {
   const LogEntry({
@@ -48,6 +50,31 @@ class SettingsService {
   static const String kRemember = 'remember';
   static const String kLog = 'log';
   static const int kMaxLog = 50;
+
+  // Separate from the native Windows adapter ID, which Dart does not expose.
+  static const String kNetworkAdapter = 'flutter_network_adapter';
+
+  static Future<NetworkAdapter?> loadNetworkAdapter() async {
+    final saved = (await _readAll())[kNetworkAdapter];
+    if (saved is! Map ||
+        saved['name'] is! String ||
+        saved['address'] is! String) return null;
+    return NetworkAdapter(
+        name: saved['name'] as String, address: saved['address'] as String);
+  }
+
+  static Future<void> saveNetworkAdapter(NetworkAdapter? adapter) async {
+    final data = await _readAll();
+    if (adapter == null) {
+      data.remove(kNetworkAdapter);
+    } else {
+      data[kNetworkAdapter] = {
+        'name': adapter.name,
+        'address': adapter.address
+      };
+    }
+    await _writeAll(data);
+  }
 
   /// 测试专用：覆盖配置目录（正常使用请保持为 null）。
   static String? configDirOverride;
