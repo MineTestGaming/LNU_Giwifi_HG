@@ -1,5 +1,7 @@
 plugins {
     id("com.android.application")
+    // Required while android.builtInKotlin=false in gradle.properties.
+    id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
