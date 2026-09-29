@@ -7,7 +7,7 @@ internal sealed class MainForm : Form
     private readonly TextBox _username = new() { PlaceholderText = "校园网上网账号", Dock = DockStyle.Fill };
     private readonly TextBox _password = new() { PlaceholderText = "密码", UseSystemPasswordChar = true, Dock = DockStyle.Fill };
     private readonly TextBox _server = new() { Text = "http://100.100.9.2", Dock = DockStyle.Fill };
-    private readonly TextBox _acName = new() { Text = "GiWiFi_lnsfHG", Dock = DockStyle.Fill };
+    private readonly ComboBox _acName = new() { Text = "GiWiFi_lnsfHG (湖光)", DropDownStyle = ComboBoxStyle.DropDown, Dock = DockStyle.Fill };
     private readonly ComboBox _profile = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly ComboBox _adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, DropDownWidth = 480 };
     private readonly Button _refreshAdapters = new() { Text = "刷新", Dock = DockStyle.Fill };
@@ -39,6 +39,7 @@ internal sealed class MainForm : Form
         _customUa.Enabled = false;
         BackColor = Color.FromArgb(247, 249, 248);
         BuildUi();
+        _acName.Items.AddRange(["GiWiFi_lnsfHG (湖光)", "GiWiFi_lnsf (寸金)"]);
         _profile.Items.AddRange(DeviceProfile.Presets.Cast<object>().ToArray());
         _profile.SelectedIndex = 0;
         _profile.SelectedIndexChanged += (_, _) => _customUa.Enabled = _profile.SelectedItem is DeviceProfile { Id: "custom" };
@@ -157,10 +158,18 @@ internal sealed class MainForm : Form
         finally { _refreshingAdapters = false; }
     }
 
+    // Campus labels are presentation only; settings and authentication use raw AC names.
+    private string AcNameValue => _acName.Text.Trim() switch
+    {
+        "GiWiFi_lnsfHG (湖光)" => "GiWiFi_lnsfHG",
+        "GiWiFi_lnsf (寸金)" => "GiWiFi_lnsf",
+        var custom => custom,
+    };
+
     private AuthClient CreateClient(CancellationToken ct)
     {
         var adapter = SelectedAdapter;
-        return new AuthClient(_server.Text, ct, _acName.Text, adapter.Id, adapter.Address);
+        return new AuthClient(_server.Text, ct, AcNameValue, adapter.Id, adapter.Address);
     }
 
     private void UpdateOperationControls()
@@ -249,7 +258,13 @@ internal sealed class MainForm : Form
             var root = doc.RootElement;
             string GetString(string key, string fallback = "") => root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
             _username.Text = GetString("username"); _password.Text = GetString("password");
-            _server.Text = GetString("server_url", "http://100.100.9.2"); _customUa.Text = GetString("custom_ua"); _acName.Text = GetString("wlan_ac_name", "GiWiFi_lnsfHG");
+            _server.Text = GetString("server_url", "http://100.100.9.2"); _customUa.Text = GetString("custom_ua");
+            _acName.Text = GetString("wlan_ac_name", "GiWiFi_lnsfHG") switch
+            {
+                "GiWiFi_lnsfHG" => "GiWiFi_lnsfHG (湖光)",
+                "GiWiFi_lnsf" => "GiWiFi_lnsf (寸金)",
+                var custom => custom,
+            };
             var adapterId = GetString("network_adapter_id");
             if (adapterId.Length > 0)
             {
@@ -276,7 +291,7 @@ internal sealed class MainForm : Form
             var directory = Path.GetDirectoryName(_settingsPath)!;
             Directory.CreateDirectory(directory);
             var profile = _profile.SelectedItem as DeviceProfile ?? DeviceProfile.Presets[0];
-            var settings = new Settings(_remember.Checked ? _username.Text.Trim() : "", _remember.Checked ? _password.Text : "", AuthClient.NormalizeBaseUrl(_server.Text), profile.Id, _customUa.Text, _acName.Text.Trim(), _remember.Checked, _autoReconnect.Checked, _entries.Select(e => new StoredLog(new DateTimeOffset(e.Time).ToUnixTimeMilliseconds(), e.Device, e.Success, e.Message)).ToList());
+            var settings = new Settings(_remember.Checked ? _username.Text.Trim() : "", _remember.Checked ? _password.Text : "", AuthClient.NormalizeBaseUrl(_server.Text), profile.Id, _customUa.Text, AcNameValue, _remember.Checked, _autoReconnect.Checked, _entries.Select(e => new StoredLog(new DateTimeOffset(e.Time).ToUnixTimeMilliseconds(), e.Device, e.Success, e.Message)).ToList());
             Dictionary<string, object?> values = settings;
             values["network_adapter_id"] = SelectedAdapter.Id;
             values["network_adapter_name"] = SelectedAdapter.Name;

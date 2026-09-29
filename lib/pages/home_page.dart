@@ -781,10 +781,27 @@ class _HomePageState extends State<HomePage> {
           TextField(
             controller: _acNameCtrl,
             enabled: !_operationActive,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: '校园 AC 名称（wlanacname）',
               hintText: 'GiWiFi_lnsfHG',
-              prefixIcon: Icon(Icons.router_outlined),
+              helperText: '可选择校区，也可直接输入自定义名称',
+              prefixIcon: const Icon(Icons.router_outlined),
+              suffixIcon: PopupMenuButton<String>(
+                tooltip: '选择校园 AC 名称',
+                enabled: !_operationActive,
+                icon: const Icon(Icons.arrow_drop_down),
+                onSelected: (value) => _acNameCtrl.text = value,
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'GiWiFi_lnsfHG',
+                    child: Text('GiWiFi_lnsfHG (湖光)'),
+                  ),
+                  PopupMenuItem(
+                    value: 'GiWiFi_lnsf',
+                    child: Text('GiWiFi_lnsf (寸金)'),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 8),

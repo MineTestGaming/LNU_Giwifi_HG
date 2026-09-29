@@ -52,6 +52,18 @@ internal static class UiChecks
             using var saved = JsonDocument.Parse(File.ReadAllText(path));
             Assert(saved.RootElement.GetProperty("network_adapter_id").GetString() == "", "switching to system default persists independently of credentials");
             Assert(saved.RootElement.GetProperty("password").GetString() == "", "credentials remain absent when remember is disabled");
+            var acName = Field<ComboBox>("_acName");
+            Assert(acName.DropDownStyle == ComboBoxStyle.DropDown, "AC name supports custom input");
+            Assert(acName.Text == "GiWiFi_lnsfHG (湖光)", "default AC name shows Huguang campus");
+            foreach (var (text, raw) in new[] { ("GiWiFi_lnsf (寸金)", "GiWiFi_lnsf"), ("GiWiFi_lnsfHG (湖光)", "GiWiFi_lnsfHG"), ("custom_ac", "custom_ac") })
+            {
+                acName.Text = text;
+                Call("SaveSettings");
+                using var acSettings = JsonDocument.Parse(File.ReadAllText(path));
+                Assert(acSettings.RootElement.GetProperty("wlan_ac_name").GetString() == raw, "AC selection saves raw name: " + raw);
+                Call("LoadSettings");
+                Assert(acName.Text == text, "AC name restores selection or custom input: " + text);
+            }
             // Realize child controls without displaying an interactive test window.
             form.ShowInTaskbar = false;
             form.Opacity = 0;

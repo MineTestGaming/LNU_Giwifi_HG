@@ -60,6 +60,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
+      final acName = find.widgetWithText(TextField, '校园 AC 名称（wlanacname）');
+      final acMenu = find.byTooltip('选择校园 AC 名称');
+      await Scrollable.ensureVisible(tester.element(acName), alignment: 0.5);
+      await tester.pumpAndSettle();
+      await tester.tap(acMenu);
+      await tester.pumpAndSettle();
+      expect(find.text('GiWiFi_lnsfHG (湖光)'), findsOneWidget);
+      await tester.tap(find.text('GiWiFi_lnsf (寸金)'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(acName).controller!.text, 'GiWiFi_lnsf');
+      await tester.enterText(acName, 'custom_ac');
+      expect(tester.widget<TextField>(acName).controller!.text, 'custom_ac');
+
       final login = find.widgetWithText(FilledButton, '一键认证');
       await tester.scrollUntilVisible(login, 200,
           scrollable: find.byType(Scrollable).first);
