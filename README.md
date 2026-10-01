@@ -92,6 +92,28 @@ Flutter 使用 Dart 的源地址绑定，不设置 Windows 原生出口接口，
 
 所选网卡断开或 IPv4 改变后不会自动回退至默认源地址。刷新可更新同名网卡的地址；网卡消失时保留“不可用”选择，需要恢复连接或手动重选。此选择与记住密码独立保存，且与 Windows 轻量版的网卡设置互不覆盖。
 
+### Flutter 桌面版原生网卡聚合
+
+“多网卡原生聚合”卡片使用 Checkbox 选择成员。先在“认证网卡”中分别选卡完成认证，再点击“检测所有网卡”或每张网卡的检测按钮；只有检测确认在线、且系统支持原生绑定的网卡才能勾选。至少选两张不同物理网卡后，点击“启动原生聚合”，确认连接中断提示并完成系统管理员授权。在线证据有效期 60 秒，开始前会逐卡重新验证；授权等待超过期限会取消创建。Android/iOS 不显示此卡片。
+
+| 平台 | 原生实现 | 前提 |
+| --- | --- | --- |
+| Windows Server | NetLbfo Team，SwitchIndependent + Dynamic | 系统提供 NetLbfo；Windows 10/11 客户端显示不支持，装有管理命令也不能在本地创建 Team |
+| macOS | networksetup，LACP | 至少两张支持 Bond 的以太网卡，交换机对应端口已经配置 LACP |
+| Linux | NetworkManager bond，balance-tlb | NetworkManager、nmcli、pkexec 和图形授权代理可用；成员必须是物理以太网 |
+
+当前只支持 DHCP IPv4、相同子网和相同网关的成员；Wi-Fi、VPN/TUN、桥接、静态 IP 和其他绑定中的成员不加入。相同子网/网关只是必要条件，实际还需处于兼容的二层网络。原生绑定不能合并两个独立运营商的出口。本次不提供代理或隧道降级。Linux balance-tlb 主要分摊发送负载，接收由一个成员处理，不能据此承诺下载带宽叠加；单个连接的速度仍受绑定模式、驱动和网络条件影响。
+
+**校园网认证与原生绑定的限制：** 创建前逐卡在线并不代表创建后还能沿用原会话。原生聚合使用单个逻辑 IP/MAC；应用等待聚合接口获得 IPv4 后再次查询门户在线状态，未确认在线就撤销绑定并恢复原连接。因此它可能在校园网中一直回滚，不能承诺多份独立认证会话或套餐带宽继续叠加。运行中每 60 秒检查聚合接口，认证失效则尝试撤销；这是定期检测，不代表能实时阻止所有未认证流量。聚合期间锁定原认证操作和成员选择。
+
+停止聚合、创建部分失败或聚合认证失效时，程序只删除自己创建的随机名称聚合；Linux 恢复此前活动连接的 UUID，不修改原连接配置。恢复也可能要求管理员授权。失败时保留配置目录中的 `flutter_bond_recovery.json`，重启后提供“恢复网卡”按钮；需要恢复完成后才能创建新的聚合。退出程序时应先停止聚合，直接关闭或崩溃后下次启动会提示恢复。恢复记录损坏时禁止新建，请先在系统网络设置中处理遗留聚合，再核对记录。
+
+macOS 分发应用为调用系统管理员授权工具关闭了 App Sandbox，此能力不适用于当前形式的 Mac App Store 沙盒发行。管理员权限只用于系统网络操作，账号密码不写入绑定脚本或恢复记录。
+
+Linux 工程已包含在 `linux/`，在 Linux 上配置 Flutter 桌面工具链后运行 `flutter build linux --release`。代码回归可运行 `flutter test` 和 `flutter analyze`；真实聚合需在有至少两张已认证兼容网卡的平台逐项验证：创建成功、LACP/DHCP 失败回滚、取消授权、认证掉线、停止恢复、进程中断后恢复。开发测试不执行真实网卡绑定。
+
+平台依据：[Microsoft NetLbfo](https://learn.microsoft.com/en-us/powershell/module/netlbfo/?view=windowsserver2025-ps)、[Apple 原生 LACP](https://support.apple.com/en-ph/guide/mac-help/mchlp2798/mac)、[Linux bonding 模式](https://www.kernel.org/doc/html/v5.15/networking/bonding.html)、[NetworkManager 绑定配置](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli-examples.html)。
+
 开发验证（无需校园网账号；HTTP 测试仅访问本机模拟门户）：
 
 ```powershell

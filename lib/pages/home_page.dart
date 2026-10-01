@@ -9,15 +9,21 @@ import '../models/device_profile.dart';
 import '../services/auth_service.dart';
 import '../services/settings_service.dart';
 import '../services/network_adapter_service.dart';
+import '../services/bond_controller.dart';
+import '../services/native_bond_backend.dart';
+import '../widgets/bond_card.dart';
 
 /// 项目仓库地址（右上角入口按钮跳转）。
 const String kRepoUrl = 'https://github.com/Eternite-0/LNU_Giwifi_HG';
 
 class HomePage extends StatefulWidget {
   const HomePage(
-      {super.key, this.networkAdapters = const NetworkAdapterService()});
+      {super.key,
+      this.networkAdapters = const NetworkAdapterService(),
+      this.bondBackend});
 
   final NetworkAdapterService networkAdapters;
+  final BondBackend? bondBackend;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -45,6 +51,8 @@ class _HomePageState extends State<HomePage> {
   NetworkAdapter? _networkAdapter;
   List<NetworkAdapter> _networkAdapters = [];
   String? _adapterError;
+  BondController? _bond;
+  String? _bondRecoveryError;
 
   bool get _isDesktop => switch (defaultTargetPlatform) {
         TargetPlatform.windows ||
@@ -57,6 +65,8 @@ class _HomePageState extends State<HomePage> {
       _busy ||
       _checking ||
       _refreshingAdapters ||
+      (_bond?.busy ?? false) ||
+      _bond?.session != null ||
       (_isDesktop && !_settingsLoaded);
 
   String? _resultMessage;
@@ -77,13 +87,47 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    if (_isDesktop) {
+      _bond = BondController(
+          backend: widget.bondBackend ?? NativeBondBackend(),
+          adapters: widget.networkAdapters,
+          checkOnline: _checkBondAdapter,
+          saveSession: SettingsService.saveBondSession)
+        ..addListener(_bondChanged);
+      _serverCtrl.addListener(_invalidateBondChecks);
+      _acNameCtrl.addListener(_invalidateBondChecks);
+      _customUaCtrl.addListener(_invalidateBondChecks);
+    }
     _loadSettings();
+  }
+
+  void _bondChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _invalidateBondChecks() => _bond?.invalidateChecks();
+
+  Future<OnlineStatus> _checkBondAdapter(NetworkAdapter adapter) async {
+    final profile = _selectedProfile;
+    if (profile.userAgent.isEmpty) throw const BondException('请先填写 User-Agent');
+    final auth = AuthService(
+        baseUrl: _serverCtrl.text.trim(),
+        wlanAcName: _acNameCtrl.text.trim(),
+        networkAdapter: adapter,
+        networkAdapters: widget.networkAdapters);
+    try {
+      return await auth.checkOnline(profile.userAgent);
+    } finally {
+      auth.dispose();
+    }
   }
 
   @override
   void dispose() {
     _keepAliveTimer?.cancel();
     _activeAuth?.cancel();
+    _bond?.removeListener(_bondChanged);
+    _bond?.dispose();
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _serverCtrl.dispose();
@@ -109,6 +153,15 @@ class _HomePageState extends State<HomePage> {
     final s = await SettingsService.loadLoginInfo();
     final adapter =
         _isDesktop ? await SettingsService.loadNetworkAdapter() : null;
+    if (_isDesktop) {
+      try {
+        final recovery = await SettingsService.loadBondSession();
+        if (recovery != null) _bond!.recover(recovery);
+      } catch (e) {
+        _bondRecoveryError =
+            '聚合恢复记录读取失败：$e。请检查应用配置目录中的 flutter_bond_recovery.json；已禁止创建新的聚合。';
+      }
+    }
     if (!mounted) return;
     setState(() {
       _usernameCtrl.text = s[SettingsService.kUsername] as String;
@@ -144,6 +197,7 @@ class _HomePageState extends State<HomePage> {
         _resultMessage = null;
       });
       if (persist) await SettingsService.saveNetworkAdapter(_networkAdapter);
+      await _bond?.refresh(adapters);
     } catch (e) {
       if (mounted) setState(() => _adapterError = '刷新网卡失败：$e');
     } finally {
@@ -479,6 +533,14 @@ class _HomePageState extends State<HomePage> {
                 if (_isDesktop) ...[
                   const SizedBox(height: 16),
                   _buildNetworkCard(),
+                  const SizedBox(height: 16),
+                  BondCard(
+                      controller: _bond!,
+                      locked: _busy ||
+                          _checking ||
+                          _refreshingAdapters ||
+                          !_settingsLoaded,
+                      recoveryError: _bondRecoveryError),
                 ],
                 if (_profileId == 'custom') ...[
                   const SizedBox(height: 16),
@@ -600,7 +662,10 @@ class _HomePageState extends State<HomePage> {
                     selected: _profileId == profile.id,
                     onSelected: _operationActive
                         ? null
-                        : (_) => setState(() => _profileId = profile.id),
+                        : (_) {
+                            _bond?.invalidateChecks();
+                            setState(() => _profileId = profile.id);
+                          },
                   ),
               ],
             ),

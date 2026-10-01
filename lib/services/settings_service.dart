@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import 'network_adapter_service.dart';
+import 'bond_controller.dart';
 
 /// 一次认证操作的日志条目
 class LogEntry {
@@ -74,6 +75,31 @@ class SettingsService {
       };
     }
     await _writeAll(data);
+  }
+
+  // Separate journal: normal settings writes cannot overwrite recovery data.
+  static Future<File> _bondFile() async {
+    final dir = Directory(await _configDir());
+    await dir.create(recursive: true);
+    return File(
+        '${dir.path}${Platform.pathSeparator}flutter_bond_recovery.json');
+  }
+
+  static Future<BondSession?> loadBondSession() async {
+    final file = await _bondFile();
+    if (!await file.exists()) return null;
+    return BondSession.fromJson(
+        jsonDecode(await file.readAsString()) as Map<String, dynamic>);
+  }
+
+  static Future<void> saveBondSession(BondSession? session) async {
+    final file = await _bondFile();
+    if (session == null) {
+      if (await file.exists()) await file.delete();
+    } else {
+      if (await file.exists()) throw const BondException('发现已有恢复记录，请先恢复上次聚合');
+      await file.writeAsString(session.encode(), flush: true);
+    }
   }
 
   /// 测试专用：覆盖配置目录（正常使用请保持为 null）。
