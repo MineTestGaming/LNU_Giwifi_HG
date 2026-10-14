@@ -112,33 +112,60 @@ class NativeBondBackend implements BondBackend {
     final raw = await _ps(r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-$server = (Get-CimInstance Win32_OperatingSystem).ProductType -ne 1
-$supported = $server -and [bool](Get-Command New-NetLbfoTeam -ErrorAction SilentlyContinue)
+$supported = $false
+$unavailable = $null
 $members = @()
-if ($supported) {
+try {
+''' +
+        _windowsLbfoPrerequisites() +
+        r'''
   $teams = @(Get-NetLbfoTeamMember -ErrorAction Stop)
   foreach ($a in Get-NetAdapter -Physical) {
     $reason = $null
-    if ($a.Status -ne 'Up' -or $a.MediaType -ne '802.3') { $reason = 'Only connected Ethernet is supported' }
-    if ($teams | Where-Object Name -eq $a.Name) { $reason = 'Already belongs to another team' }
+    if ($a.Status -ne 'Up' -or $a.MediaType -ne '802.3') { $reason = '仅支持已连接的物理以太网卡' }
+    if ($teams | Where-Object Name -eq $a.Name) { $reason = '此网卡已属于其他 LBFO Team' }
     $ipif = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4
-    if ($ipif.Dhcp -ne 'Enabled') { $reason = 'Only DHCP is supported' }
+    if ($ipif.Dhcp -ne 'Enabled') { $reason = '仅支持 DHCP，静态地址不加入聚合' }
     $gateway = (Get-NetIPConfiguration -InterfaceIndex $a.ifIndex).IPv4DefaultGateway.NextHop
     foreach ($ip in Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4) {
       $members += @{name=$a.Name; address=$ip.IPAddress; prefix=$ip.PrefixLength;
         gateway=[string]$gateway; restoreId=$a.Name; reason=$reason}
     }
   }
+  $supported = $true
+} catch {
+  $unavailable = "Windows Server LBFO 检测失败：$($_.Exception.Message)"
+  $members = @()
 }
-@{supported=$supported; members=$members} | ConvertTo-Json -Depth 5 -Compress
+@{supported=$supported; reason=$unavailable; members=$members} | ConvertTo-Json -Depth 5 -Compress
 ''');
     final json = jsonDecode(raw) as Map;
     if (json['supported'] != true) {
-      _unsupported =
-          '当前 Windows 不支持原生 Team：需 Windows Server 和 NetLbfo；Windows 10/11 客户端不支持。';
+      final reason = json['reason'];
+      _unsupported = reason is String && reason.trim().isNotEmpty
+          ? reason
+          : '当前 Windows 不支持原生 LBFO Team：需 Windows Server 和 NetLbfo；Windows 10/11 客户端不支持。';
       return [];
     }
     return [for (final row in json['members'] as List) _fromRow(row as Map)];
+  }
+
+  // Recheck in the elevated process because availability can change during UAC.
+  // Recovery requires only the commands it uses, so it can work without New.
+  String _windowsLbfoPrerequisites({bool recovery = false}) {
+    final commands = [
+      'Get-NetLbfoTeam',
+      'Get-NetLbfoTeamMember',
+      if (!recovery) 'New-NetLbfoTeam',
+      'Remove-NetLbfoTeam',
+    ];
+    return '''
+if ((Get-CimInstance Win32_OperatingSystem).ProductType -notin @(2, 3)) { throw 'LBFO 需要 Windows Server；Windows 10/11 客户端不支持本地 Team' }
+try { Import-Module -Name NetLbfo -ErrorAction Stop } catch { throw "NetLbfo 模块无法加载：\$(\$_.Exception.Message)" }
+foreach (\$command in @(${commands.map(powershellQuote).join(',')})) {
+  if (-not (Get-Command -Name \$command -Module NetLbfo -CommandType Cmdlet,Function -ErrorAction SilentlyContinue)) { throw "NetLbfo 缺少所需命令：\$command" }
+}
+''';
   }
 
   NativeMember _fromRow(Map row) => NativeMember(
@@ -240,7 +267,7 @@ if ($supported) {
 
   String get description => switch (platform) {
         BondPlatform.windows =>
-          'Windows Server：原生 Team / SwitchIndependent / Dynamic',
+          'Windows Server：原生 LBFO Team / SwitchIndependent / Dynamic',
         BondPlatform.macos => 'macOS：原生 LACP；交换机端口须已配置 LACP',
         BondPlatform.linux => 'Linux：NetworkManager bond / balance-tlb（同一二层网络）',
         _ => '此平台不支持原生绑定',
@@ -408,8 +435,8 @@ if ($supported) {
         return '''
 \$ErrorActionPreference = 'Stop'
 if ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -ge $expiry) { throw 'Authentication evidence expired during administrator authorization' }
-if ((Get-CimInstance Win32_OperatingSystem).ProductType -eq 1) { throw 'Windows client does not support native teaming' }
-if (Get-NetLbfoTeam -Name ${powershellQuote(id)} -ErrorAction SilentlyContinue) { throw 'Team name already exists' }
+${_windowsLbfoPrerequisites()}
+if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) { throw 'Team name already exists' }
 ${[
           for (final row in rows)
             '''\$a = Get-NetAdapter -Name ${powershellQuote(row['name'] as String)}
@@ -472,7 +499,8 @@ ${[
       case BondPlatform.windows:
         return '''
 \$ErrorActionPreference = 'Stop'
-if (Get-NetLbfoTeam -Name ${powershellQuote(id)} -ErrorAction SilentlyContinue) {
+${_windowsLbfoPrerequisites(recovery: true)}
+if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) {
   \$expected = @(${session.members.map((a) => powershellQuote(a.name)).join(',')})
   \$actual = @(Get-NetLbfoTeamMember -Team ${powershellQuote(id)} | Select-Object -ExpandProperty Name)
   if (@(Compare-Object \$expected \$actual).Count -ne 0) { throw 'Team ownership mismatch; manual recovery required' }
@@ -594,7 +622,7 @@ exit \$p.ExitCode
             jsonDecode((await output.readAsString()).replaceFirst('\uFEFF', ''))
                 as Map;
         if (value['ok'] != true)
-          throw BondException('原生 Team 操作失败：${value['error']}');
+          throw BondException('原生 LBFO Team 操作失败：${value['error']}');
       } finally {
         await dir.delete(recursive: true);
       }

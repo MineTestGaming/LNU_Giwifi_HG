@@ -98,9 +98,11 @@ Flutter 使用 Dart 的源地址绑定，不设置 Windows 原生出口接口，
 
 | 平台 | 原生实现 | 前提 |
 | --- | --- | --- |
-| Windows Server | NetLbfo Team，SwitchIndependent + Dynamic | 系统提供 NetLbfo；Windows 10/11 客户端显示不支持，装有管理命令也不能在本地创建 Team |
+| Windows Server | LBFO（NetLbfo）Team，SwitchIndependent + Dynamic | NetLbfo 模块可加载，查询、创建、删除命令完整；Windows 10/11 客户端显示不支持，装有管理命令也不能在本地创建 Team |
 | macOS | networksetup，LACP | 至少两张支持 Bond 的以太网卡，交换机对应端口已经配置 LACP |
 | Linux | NetworkManager bond，balance-tlb | NetworkManager、nmcli、pkexec 和图形授权代理可用；成员必须是物理以太网 |
+
+Windows Server 的 LBFO 支持会检查 `Get-NetLbfoTeam`、`Get-NetLbfoTeamMember`、`New-NetLbfoTeam` 和 `Remove-NetLbfoTeam`，接受 NetLbfo 模块导出的 CIM 函数命令。模块缺失、命令不完整或查询失败时，卡片显示具体原因并禁用成员选择；创建与恢复获得管理员授权后会再次检查。恢复只依赖查询和删除命令，成员匹配后才删除本次 Team 并恢复 DHCP；查询失败时保留恢复记录供重试。默认 SwitchIndependent 模式不要求交换机配置 LACP，但仍需满足下述网络与认证条件。
 
 当前只支持 DHCP IPv4、相同子网和相同网关的成员；Wi-Fi、VPN/TUN、桥接、静态 IP 和其他绑定中的成员不加入。相同子网/网关只是必要条件，实际还需处于兼容的二层网络。原生绑定不能合并两个独立运营商的出口。本次不提供代理或隧道降级。Linux balance-tlb 主要分摊发送负载，接收由一个成员处理，不能据此承诺下载带宽叠加；单个连接的速度仍受绑定模式、驱动和网络条件影响。
 
