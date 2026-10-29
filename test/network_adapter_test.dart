@@ -9,6 +9,39 @@ import 'package:giwifi_ua_switcher/services/settings_service.dart';
 void main() {
   const wifi = NetworkAdapter(name: 'Wi-Fi', address: '192.0.2.1');
 
+  for (final bound in [false, true]) {
+    test('登录页所有候选请求使用${bound ? "所选网卡 IPv4" : "系统默认且不伪造 IP"}', () async {
+      const adapter = NetworkAdapter(name: 'test-loopback', address: '127.0.0.1');
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requests = <Uri>[];
+      server.listen((request) async {
+        requests.add(request.uri);
+        request.response.write('<html>waiting</html>');
+        await request.response.close();
+      });
+      final auth = AuthService(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        wlanAcName: 'custom AC & campus',
+        networkAdapter: bound ? adapter : null,
+        networkAdapters:
+            NetworkAdapterService(listAdapters: () async => [adapter]),
+      );
+      addTearDown(auth.dispose);
+      await auth.fetchLoginPage('test');
+      expect(requests, hasLength(4));
+      for (final request in requests) {
+        expect(request.path, '/gportal/web/login');
+        expect(request.queryParameters['wlanuserip'],
+            bound ? adapter.address : null);
+      }
+      expect(requests[0].queryParameters['wlanacname'], 'custom AC & campus');
+      expect(requests[1].queryParameters['wlanacname'], 'custom AC & campus');
+      expect(requests[1].queryParameters['is_mobile'], '1');
+      expect(requests[3].queryParameters['is_mobile'], '1');
+    });
+  }
+
   test('刷新只更新同名网卡，保留已拔除网卡的选择', () {
     const service = NetworkAdapterService();
     const newWifi = NetworkAdapter(name: 'Wi-Fi', address: '192.0.2.2');

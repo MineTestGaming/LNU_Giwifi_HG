@@ -152,14 +152,22 @@ internal sealed class AuthClient : IDisposable
 
     private async Task<string> FetchLoginPageAsync(string ua)
     {
-        var acName = Uri.EscapeDataString(_wlanAcName);
+        string LoginUrl(bool includeAc = true, bool mobile = false)
+        {
+            var parameters = new List<string>();
+            if (_networkAdapter is not null)
+                parameters.Add("wlanuserip=" + Uri.EscapeDataString(_networkAdapter.Address));
+            if (includeAc) parameters.Add("wlanacname=" + Uri.EscapeDataString(_wlanAcName));
+            if (mobile) parameters.Add("is_mobile=1&pagetype=login&logintype=1");
+            return _baseUrl + LoginPath + (parameters.Count == 0 ? "" : "?" + string.Join("&", parameters));
+        }
+
         var urls = new[]
         {
-            _baseUrl + LoginPath + "?wlanacname=" + acName,
-            _baseUrl + LoginPath + "?wlanacname=" + acName + "&is_mobile=1&pagetype=login&logintype=1",
-            _baseUrl + LoginPath,
-            _baseUrl + LoginPath + "?is_mobile=1&pagetype=login&logintype=1",
-            _baseUrl + LoginPath + "?wlanuserip=10.0.0.1&wlanacname=GiWiFi"
+            LoginUrl(),
+            LoginUrl(mobile: true),
+            LoginUrl(includeAc: false),
+            LoginUrl(includeAc: false, mobile: true)
         };
         string? firstPage = null;
         Exception? lastError = null;

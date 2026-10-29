@@ -518,15 +518,29 @@ class AuthService {
   /// 门户对移动端 UA 返回的首页不含登录表单（页面 JS 会跳转到
   /// `?is_mobile=1&pagetype=login&logintype=1` 才渲染表单），
   /// 这里按浏览器最终行为依次尝试，只认带密码框的登录表单页；
-  /// 连接失败时再带通用 wlan 参数重试一次。
+  /// 指定网卡时，所有候选请求均携带该网卡的真实 wlanuserip。
   Future<String> fetchLoginPage(String userAgent) async {
-    final acName = Uri.encodeQueryComponent(wlanAcName.trim());
+    String loginUrl({bool includeAc = true, bool mobile = false}) {
+      final parameters = <String, String>{
+        if (networkAdapter != null) 'wlanuserip': networkAdapter!.address,
+        if (includeAc) 'wlanacname': wlanAcName.trim(),
+        if (mobile) ...{
+          'is_mobile': '1',
+          'pagetype': 'login',
+          'logintype': '1',
+        },
+      };
+      final uri = Uri.parse('$baseUrl$kLoginPath');
+      return parameters.isEmpty
+          ? uri.toString()
+          : uri.replace(queryParameters: parameters).toString();
+    }
+
     final urls = <String>[
-      '$baseUrl$kLoginPath?wlanacname=$acName',
-      '$baseUrl$kLoginPath?wlanacname=$acName&is_mobile=1&pagetype=login&logintype=1',
-      '$baseUrl$kLoginPath',
-      '$baseUrl$kLoginPath?is_mobile=1&pagetype=login&logintype=1',
-      '$baseUrl$kLoginPath?wlanuserip=10.0.0.1&wlanacname=GiWiFi',
+      loginUrl(),
+      loginUrl(mobile: true),
+      loginUrl(includeAc: false),
+      loginUrl(includeAc: false, mobile: true),
     ];
     Object? lastError;
     String? firstPage;
