@@ -6,7 +6,8 @@ const Color kBrandPrimary = Color(0xFFF3D223);
 ThemeData buildGiWiFiTheme([Brightness brightness = Brightness.light]) {
   return ThemeData(
     useMaterial3: true,
-    fontFamily: 'MiSans',
+    fontFamily: 'GoogleSans',
+    fontFamilyFallback: ['MiSans'],
     colorScheme: ColorScheme.fromSeed(
       seedColor: kBrandPrimary,
       brightness: brightness,

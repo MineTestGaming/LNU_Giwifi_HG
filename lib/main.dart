@@ -13,7 +13,7 @@ class GiWiFiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GiWiFi 一键认证',
+      title: 'GiWiFi 认证 Plus',
       debugShowCheckedModeBanner: false,
       theme: buildGiWiFiTheme(),
       darkTheme: buildGiWiFiTheme(Brightness.dark),
