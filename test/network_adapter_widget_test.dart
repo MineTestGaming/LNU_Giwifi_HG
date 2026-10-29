@@ -6,6 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:giwifi_ua_switcher/pages/home_page.dart';
 import 'package:giwifi_ua_switcher/services/network_adapter_service.dart';
 import 'package:giwifi_ua_switcher/services/settings_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
+import 'support/memory_secret_store.dart';
+import 'bond_controller_test.dart' show FakeBackend;
 
 Future<void> removeTestDirectory(Directory dir) async {
   // Windows may still be closing the last asynchronous file handle.
@@ -21,6 +24,8 @@ Future<void> removeTestDirectory(Directory dir) async {
 }
 
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   testWidgets('桌面端恢复失效网卡、阻止检测期间切换并允许恢复系统默认', (tester) async {
     tester.view.physicalSize = const Size(1000, 2000);
     tester.view.devicePixelRatio = 1;
@@ -43,8 +48,8 @@ void main() {
       }
       return checking.future;
     });
-    await tester
-        .pumpWidget(MaterialApp(home: HomePage(networkAdapters: service)));
+    await tester.pumpWidget(MaterialApp(
+        home: HomePage(networkAdapters: service, bondBackend: FakeBackend())));
     for (var i = 0; i < 100 && !loaded.isCompleted; i++) {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)));
@@ -72,12 +77,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('系统默认').last);
     await tester.pumpAndSettle();
-    NetworkAdapter? persisted = saved;
-    for (var i = 0; i < 100 && persisted != null; i++) {
-      persisted = await tester.runAsync(SettingsService.loadNetworkAdapter);
-      await tester.pump();
-    }
-    expect(persisted, isNull, reason: '切换到系统默认后未保存');
     for (var i = 0;
         i < 100 &&
             tester.widget<DropdownButton<NetworkAdapter>>(selector).onChanged ==
@@ -89,6 +88,9 @@ void main() {
     }
     expect(tester.widget<DropdownButton<NetworkAdapter>>(selector).onChanged,
         isNotNull);
+    expect(find.textContaining('网卡选择保存失败'), findsNothing);
+    final persisted = await tester.runAsync(SettingsService.loadNetworkAdapter);
+    expect(persisted, isNull, reason: '切换到系统默认后未保存');
     await tester.pumpAndSettle();
     expect(
         tester.widget<DropdownButton<NetworkAdapter>>(selector).value, isNull);

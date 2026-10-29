@@ -3,10 +3,14 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:giwifi_ua_switcher/services/auth_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
+import 'support/memory_secret_store.dart';
 import 'package:giwifi_ua_switcher/services/network_adapter_service.dart';
 import 'package:giwifi_ua_switcher/services/settings_service.dart';
 
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   const wifi = NetworkAdapter(name: 'Wi-Fi', address: '192.0.2.1');
 
   for (final bound in [false, true]) {

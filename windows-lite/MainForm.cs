@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace GiWifiLite;
 
@@ -20,10 +21,12 @@ internal sealed class MainForm : Form
     private readonly ListBox _logs = new() { Dock = DockStyle.Fill, IntegralHeight = false };
     private readonly System.Windows.Forms.Timer _reconnectTimer = new() { Interval = 60_000 };
     private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "giwifi_ua_switcher", "settings.json");
+    private string PasswordSecretPath => _settingsPath + ".password.dpapi";
     private CancellationTokenSource? _activeCts;
     private bool _busy;
     private bool _checking;
     private bool _loadingSettings = true;
+    private bool _credentialLoadFailed;
     private bool _refreshingAdapters;
     private List<LogEntry> _entries = [];
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -100,7 +103,7 @@ internal sealed class MainForm : Form
         adapterRow.Controls.Add(_adapter, 0, 0); adapterRow.Controls.Add(_refreshAdapters, 1, 0);
         AddField(form, 6, "认证网卡", adapterRow);
         form.Controls.Add(_remember, 1, 7); form.Controls.Add(_autoReconnect, 1, 8);
-        var note = new Label { Text = "账号密码仅在勾选时保存在本机 AppData 配置中。", AutoSize = true, ForeColor = Color.Gray, Anchor = AnchorStyles.Left };
+        var note = new Label { Text = "勾选后密码使用 Windows 账户加密保存。", AutoSize = true, ForeColor = Color.Gray, Anchor = AnchorStyles.Left };
         form.Controls.Add(note, 1, 9);
         page.Controls.Add(form, 0, 1);
 
@@ -169,7 +172,8 @@ internal sealed class MainForm : Form
     private AuthClient CreateClient(CancellationToken ct)
     {
         var adapter = SelectedAdapter;
-        return new AuthClient(_server.Text, ct, AcNameValue, adapter.Id, adapter.Address);
+        return new AuthClient(_server.Text, ct, AcNameValue, adapter.Id, adapter.Address,
+            Path.Combine(Path.GetDirectoryName(_settingsPath)!, "cookies"));
     }
 
     private void UpdateOperationControls()
@@ -251,13 +255,40 @@ internal sealed class MainForm : Form
 
     private void LoadSettings()
     {
+        var wasLoading = _loadingSettings;
+        _loadingSettings = true;
         try
         {
             if (!File.Exists(_settingsPath)) return;
             using var doc = JsonDocument.Parse(File.ReadAllText(_settingsPath));
             var root = doc.RootElement;
             string GetString(string key, string fallback = "") => root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
-            _username.Text = GetString("username"); _password.Text = GetString("password");
+            _username.Text = GetString("username");
+            _password.Text = "";
+            var remember = !root.TryGetProperty("remember", out var r) || r.ValueKind != JsonValueKind.False;
+            var legacyPassword = GetString("password");
+            if (remember && legacyPassword.Length > 0)
+            {
+                WindowsSecretFile.Write(PasswordSecretPath, JsonSerializer.Serialize(new { username = _username.Text, password = legacyPassword }));
+                _password.Text = legacyPassword;
+            }
+            else if (remember)
+            {
+                var secret = WindowsSecretFile.Read(PasswordSecretPath);
+                if (secret is not null)
+                {
+                    using var saved = JsonDocument.Parse(secret);
+                    if (saved.RootElement.GetProperty("username").GetString() == _username.Text)
+                        _password.Text = saved.RootElement.GetProperty("password").GetString() ?? "";
+                }
+            }
+            if (root.TryGetProperty("password", out _))
+            {
+                var cleaned = JsonNode.Parse(File.ReadAllText(_settingsPath))!.AsObject();
+                cleaned.Remove("password");
+                WriteSettingsFile(cleaned.ToJsonString(JsonOptions));
+            }
+            if (!remember) WindowsSecretFile.Delete(PasswordSecretPath);
             _server.Text = GetString("server_url", "http://100.100.9.2"); _customUa.Text = GetString("custom_ua");
             _acName.Text = GetString("wlan_ac_name", "GiWiFi_lnsfHG") switch
             {
@@ -271,7 +302,7 @@ internal sealed class MainForm : Form
                 var savedAdapter = new NetworkAdapter(adapterId, GetString("network_adapter_name", "已保存的网卡"), GetString("network_adapter_address"), -1);
                 _adapter.Items.Add(savedAdapter); _adapter.SelectedItem = savedAdapter;
             }
-            _remember.Checked = !root.TryGetProperty("remember", out var r) || r.ValueKind != JsonValueKind.False;
+            _remember.Checked = remember;
             var profileId = GetString("profile_id", "pc");
             var index = Array.FindIndex(DeviceProfile.Presets, p => p.Id == profileId);
             _profile.SelectedIndex = index < 0 ? 0 : index;
@@ -279,26 +310,45 @@ internal sealed class MainForm : Form
             if (root.TryGetProperty("log", out var log) && log.ValueKind == JsonValueKind.Array)
                 _entries = log.EnumerateArray().Select(e => new LogEntry(DateTimeOffset.FromUnixTimeMilliseconds(e.GetProperty("time").GetInt64()).LocalDateTime, e.GetProperty("device").GetString() ?? "", e.GetProperty("success").GetBoolean(), e.GetProperty("message").GetString() ?? "")).Take(50).ToList();
         }
-        catch { _entries = []; }
+        catch (Exception ex) { _credentialLoadFailed = true; _entries = []; _status.Text = $"安全配置读取失败，请修复后重启：{ex.Message}"; }
+        finally { _loadingSettings = wasLoading; }
         RenderLogs();
     }
 
     private void SaveSettings()
     {
-        if (_loadingSettings) return;
+        if (_loadingSettings || _credentialLoadFailed) return;
         try
         {
             var directory = Path.GetDirectoryName(_settingsPath)!;
             Directory.CreateDirectory(directory);
             var profile = _profile.SelectedItem as DeviceProfile ?? DeviceProfile.Presets[0];
-            var settings = new Settings(_remember.Checked ? _username.Text.Trim() : "", _remember.Checked ? _password.Text : "", AuthClient.NormalizeBaseUrl(_server.Text), profile.Id, _customUa.Text, AcNameValue, _remember.Checked, _autoReconnect.Checked, _entries.Select(e => new StoredLog(new DateTimeOffset(e.Time).ToUnixTimeMilliseconds(), e.Device, e.Success, e.Message)).ToList());
-            Dictionary<string, object?> values = settings;
+            if (_remember.Checked)
+                WindowsSecretFile.Write(PasswordSecretPath, JsonSerializer.Serialize(new { username = _username.Text.Trim(), password = _password.Text }));
+            var settings = new Settings(_remember.Checked ? _username.Text.Trim() : "", AuthClient.NormalizeBaseUrl(_server.Text), profile.Id, _customUa.Text, AcNameValue, _remember.Checked, _autoReconnect.Checked, _entries.Select(e => new StoredLog(new DateTimeOffset(e.Time).ToUnixTimeMilliseconds(), e.Device, e.Success, e.Message)).ToList());
+            var values = File.Exists(_settingsPath)
+                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(File.ReadAllText(_settingsPath)) ?? []
+                : new Dictionary<string, object?>();
+            foreach (var pair in (Dictionary<string, object?>)settings) values[pair.Key] = pair.Value;
+            values.Remove("password");
             values["network_adapter_id"] = SelectedAdapter.Id;
             values["network_adapter_name"] = SelectedAdapter.Name;
             values["network_adapter_address"] = SelectedAdapter.Address;
-            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(values, JsonOptions));
+            WriteSettingsFile(JsonSerializer.Serialize(values, JsonOptions));
+            if (!_remember.Checked) WindowsSecretFile.Delete(PasswordSecretPath);
         }
-        catch { }
+        catch (Exception ex) { _status.Text = $"安全配置保存失败：{ex.Message}"; }
+    }
+
+    private void WriteSettingsFile(string json)
+    {
+        var temporary = _settingsPath + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, json);
+            File.Move(temporary, _settingsPath, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     private void RenderLogs()
@@ -315,11 +365,11 @@ internal sealed class MainForm : Form
         _ => ex.Message
     };
 
-    private sealed record Settings(string Username, string Password, string ServerUrl, string ProfileId, string CustomUa, string WlanAcName, bool Remember, bool AutoReconnect, List<StoredLog> Log)
+    private sealed record Settings(string Username, string ServerUrl, string ProfileId, string CustomUa, string WlanAcName, bool Remember, bool AutoReconnect, List<StoredLog> Log)
     {
         public static implicit operator Dictionary<string, object?>(Settings s) => new()
         {
-            ["username"] = s.Username, ["password"] = s.Password, ["server_url"] = s.ServerUrl,
+            ["username"] = s.Username, ["server_url"] = s.ServerUrl,
             ["profile_id"] = s.ProfileId, ["custom_ua"] = s.CustomUa, ["wlan_ac_name"] = s.WlanAcName, ["remember"] = s.Remember,
             ["auto_reconnect"] = s.AutoReconnect, ["log"] = s.Log.Select(x => new { time = x.Time, device = x.Device, success = x.Success, message = x.Message })
         };

@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'network_adapter_service.dart';
 import 'bond_controller.dart';
+import 'secret_store.dart';
 
 /// 一次认证操作的日志条目
 class LogEntry {
@@ -40,8 +41,22 @@ class LogEntry {
 /// 存储位置：Windows 优先沿用 %APPDATA%，其他平台使用 Flutter
 /// 官方提供的应用支持目录，确保 Android 写入应用自己的持久化沙盒。
 ///
-/// 注意：密码以明文保存在本机配置文件中，请仅在个人设备上使用。
+/// 密码保存在系统安全存储中；旧版 JSON 密码会在首次读取时迁移并删除。
 class SettingsService {
+  static SecretStore? get secretStoreOverride => SecretStores.override;
+  static set secretStoreOverride(SecretStore? store) =>
+      SecretStores.override = store;
+  static SecretStore get _secrets => SecretStores.current;
+  static const String _passwordSecretKey = 'giwifi_password_v1';
+
+  static Future<void> _storePassword(String username, String password) async {
+    final payload = jsonEncode({'username': username, 'password': password});
+    await _secrets.write(_passwordSecretKey, payload);
+    if (await _secrets.read(_passwordSecretKey) != payload) {
+      throw StateError('安全存储校验失败，旧密码未删除');
+    }
+  }
+
   static const String kUsername = 'username';
   static const String kPassword = 'password';
   static const String kServerUrl = 'server_url';
@@ -138,7 +153,14 @@ class SettingsService {
 
   static Future<void> _writeAll(Map<String, dynamic> data) async {
     final file = await _configFile();
-    await file.writeAsString(jsonEncode(data), flush: true);
+    final temporary =
+        File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.tmp');
+    try {
+      await temporary.writeAsString(jsonEncode(data), flush: true);
+      await temporary.rename(file.path);
+    } finally {
+      if (await temporary.exists()) await temporary.delete();
+    }
   }
 
   static Future<void> saveLoginInfo({
@@ -153,7 +175,8 @@ class SettingsService {
     final data = await _readAll();
     if (remember) {
       data[kUsername] = username;
-      data[kPassword] = password;
+      await _storePassword(username, password);
+      data.remove(kPassword);
     } else {
       data.remove(kUsername);
       data.remove(kPassword);
@@ -164,18 +187,44 @@ class SettingsService {
     data[kCustomUa] = customUa;
     data[kRemember] = remember;
     await _writeAll(data);
+    if (!remember) await _secrets.delete(_passwordSecretKey);
   }
 
   static Future<Map<String, Object>> loadLoginInfo() async {
     final data = await _readAll();
+    final remember = data[kRemember] as bool? ?? true;
+    var password = '';
+    if (remember) {
+      final legacyPassword = data[kPassword] as String?;
+      if (legacyPassword != null) {
+        await _storePassword(data[kUsername] as String? ?? '', legacyPassword);
+        data.remove(kPassword);
+        await _writeAll(data);
+        password = legacyPassword;
+      } else {
+        final secret = await _secrets.read(_passwordSecretKey);
+        if (secret != null) {
+          final saved = jsonDecode(secret) as Map<String, dynamic>;
+          if (saved['username'] == (data[kUsername] as String? ?? '')) {
+            password = saved['password'] as String? ?? '';
+          }
+        }
+      }
+    } else {
+      if (data.containsKey(kPassword)) {
+        data.remove(kPassword);
+        await _writeAll(data);
+      }
+      await _secrets.delete(_passwordSecretKey);
+    }
     return <String, Object>{
       kUsername: data[kUsername] as String? ?? '',
-      kPassword: data[kPassword] as String? ?? '',
+      kPassword: password,
       kServerUrl: data[kServerUrl] as String? ?? 'http://100.100.9.2',
       kWlanAcName: data[kWlanAcName] as String? ?? 'GiWiFi_lnsfHG',
       kProfileId: data[kProfileId] as String? ?? 'pc',
       kCustomUa: data[kCustomUa] as String? ?? '',
-      kRemember: data[kRemember] as bool? ?? true,
+      kRemember: remember,
     };
   }
 

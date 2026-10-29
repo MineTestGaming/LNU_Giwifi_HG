@@ -4,11 +4,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:giwifi_ua_switcher/services/auth_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
+import 'support/memory_secret_store.dart';
 
 /// 本地模拟 GiWiFi 门户，验证“换绑确认 -> 冷却 -> 二次认证”完整链路：
 /// 第一次 loginAction 返回 resultCode=124，确认换绑并 POST resultData 后，
 /// 等待冷却再次认证返回 status=1。
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   test('换绑流程：124 确认 -> 提交换绑 -> 冷却 -> 二次认证成功', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final base = 'http://127.0.0.1:${server.port}';

@@ -40,13 +40,17 @@ internal sealed class AuthClient : IDisposable
     private string _baseUrl;
     private readonly string _wlanAcName;
     private readonly NetworkAdapter? _networkAdapter;
+    private readonly string? _cookieDirectory;
+    private string? _cookieFile;
+    private string? _cookieUa;
 
-    public AuthClient(string baseUrl, CancellationToken ct, string wlanAcName = "GiWiFi_lnsfHG", string networkAdapterId = "", string networkAddress = "")
+    public AuthClient(string baseUrl, CancellationToken ct, string wlanAcName = "GiWiFi_lnsfHG", string networkAdapterId = "", string networkAddress = "", string? cookieDirectory = null)
     {
         _baseUrl = NormalizeBaseUrl(baseUrl);
         _wlanAcName = wlanAcName.Trim();
         _ct = ct;
         _networkAdapter = string.IsNullOrEmpty(networkAdapterId) ? null : NetworkAdapter.Resolve(networkAdapterId, networkAddress, NetworkAdapter.ListAvailable());
+        _cookieDirectory = cookieDirectory;
         var handler = new SocketsHttpHandler { CookieContainer = _cookies, UseCookies = true, AllowAutoRedirect = true, MaxAutomaticRedirections = 5 };
         if (_networkAdapter is not null)
         {
@@ -197,7 +201,13 @@ internal sealed class AuthClient : IDisposable
         if (si.Length == 0) return false;
         using var response = await SendAsync(HttpMethod.Post, _baseUrl + LogoutAction, ua, "si=" + Encode(si));
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(_ct));
-        return doc.RootElement.TryGetProperty("status", out var status) && status.ToString() == "1";
+        var success = doc.RootElement.TryGetProperty("status", out var status) && status.ToString() == "1";
+        if (success)
+        {
+            foreach (Cookie cookie in _cookies.GetAllCookies()) cookie.Expired = true;
+            if (_cookieFile is not null) WindowsSecretFile.Delete(_cookieFile);
+        }
+        return success;
     }
 
     private async Task<bool> HasActiveSessionAsync(string ua)
@@ -263,6 +273,7 @@ internal sealed class AuthClient : IDisposable
     {
         _ct.ThrowIfCancellationRequested();
         _networkAdapter?.Validate();
+        LoadCookies(ua);
         using var request = new HttpRequestMessage(method, url);
         request.Headers.TryAddWithoutValidation("User-Agent", ua);
         request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
@@ -270,8 +281,51 @@ internal sealed class AuthClient : IDisposable
         if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded");
         var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, _ct);
         response.EnsureSuccessStatusCode();
+        SaveCookies();
         return response;
     }
+
+    private void LoadCookies(string ua)
+    {
+        if (_cookieDirectory is null) return;
+        if (_cookieUa is not null)
+        {
+            if (_cookieUa != ua) throw new InvalidOperationException("同一认证会话不能切换 User-Agent");
+            return;
+        }
+        _cookieUa = ua;
+        var scope = $"{new Uri(_baseUrl).GetLeftPart(UriPartial.Authority)}\n{ua}\n{_networkAdapter?.Id}\n{_networkAdapter?.Address}";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scope)));
+        _cookieFile = Path.Combine(_cookieDirectory, $"cookies_{digest}.dpapi");
+        var raw = WindowsSecretFile.Read(_cookieFile);
+        if (raw is null) return;
+        var saved = JsonSerializer.Deserialize<List<SavedCookie>>(raw) ?? [];
+        var portal = new Uri(_baseUrl);
+        foreach (var item in saved)
+        {
+            if (item.ExpiresAt <= DateTime.UtcNow) continue;
+            if (item.Domain.Length > 0 && !string.Equals(item.Domain.TrimStart('.'), portal.Host, StringComparison.OrdinalIgnoreCase)) continue;
+            var cookie = new Cookie(item.Name, item.Value) { Path = item.Path, Secure = item.Secure, Expires = item.ExpiresAt };
+            _cookies.Add(portal, cookie);
+        }
+    }
+
+    private void SaveCookies()
+    {
+        if (_cookieFile is null) return;
+        var portal = new Uri(_baseUrl);
+        var saved = _cookies.GetAllCookies().Cast<Cookie>()
+            .Where(cookie => string.Equals(cookie.Domain.TrimStart('.'), portal.Host, StringComparison.OrdinalIgnoreCase))
+            .Where(cookie => !cookie.Expired && (!cookie.Secure || portal.Scheme == "https"))
+            .Select(cookie => new SavedCookie(cookie.Name, cookie.Value, cookie.Path, cookie.Domain, cookie.Secure,
+                cookie.Expires == DateTime.MinValue ? DateTime.UtcNow.AddHours(24) : cookie.Expires.ToUniversalTime()))
+            .Where(cookie => cookie.ExpiresAt > DateTime.UtcNow)
+            .ToList();
+        if (saved.Count == 0) WindowsSecretFile.Delete(_cookieFile);
+        else WindowsSecretFile.Write(_cookieFile, JsonSerializer.Serialize(saved));
+    }
+
+    private sealed record SavedCookie(string Name, string Value, string Path, string Domain, bool Secure, DateTime ExpiresAt);
 
     private string Resolve(string pathOrUrl) => Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var uri) ? uri.ToString() : new Uri(new Uri(_baseUrl + "/"), pathOrUrl.TrimStart('/')).ToString();
     // Match Dart Uri.encodeComponent used by the original Flutter client.

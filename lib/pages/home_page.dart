@@ -48,6 +48,7 @@ class _HomePageState extends State<HomePage> {
   bool _keepAlive = false;
   bool _refreshingAdapters = false;
   bool _settingsLoaded = false;
+  bool _savingCredentials = false;
   NetworkAdapter? _networkAdapter;
   List<NetworkAdapter> _networkAdapters = [];
   String? _adapterError;
@@ -64,10 +65,11 @@ class _HomePageState extends State<HomePage> {
   bool get _operationActive =>
       _busy ||
       _checking ||
+      _savingCredentials ||
       _refreshingAdapters ||
       (_bond?.busy ?? false) ||
       _bond?.session != null ||
-      (_isDesktop && !_settingsLoaded);
+      !_settingsLoaded;
 
   String? _resultMessage;
   bool _resultSuccess = false;
@@ -150,7 +152,22 @@ class _HomePageState extends State<HomePage> {
   // ================= 数据 =================
 
   Future<void> _loadSettings() async {
-    final s = await SettingsService.loadLoginInfo();
+    Map<String, Object> s;
+    var settingsError = false;
+    try {
+      s = await SettingsService.loadLoginInfo();
+    } catch (_) {
+      settingsError = true;
+      s = <String, Object>{
+        SettingsService.kUsername: '',
+        SettingsService.kPassword: '',
+        SettingsService.kServerUrl: 'http://100.100.9.2',
+        SettingsService.kWlanAcName: 'GiWiFi_lnsfHG',
+        SettingsService.kProfileId: 'pc',
+        SettingsService.kCustomUa: '',
+        SettingsService.kRemember: true,
+      };
+    }
     final adapter =
         _isDesktop ? await SettingsService.loadNetworkAdapter() : null;
     if (_isDesktop) {
@@ -173,6 +190,10 @@ class _HomePageState extends State<HomePage> {
       _remember = s[SettingsService.kRemember] as bool;
       _networkAdapter = adapter;
       _settingsLoaded = true;
+      if (settingsError) {
+        _resultMessage = '读取安全凭据失败，原配置已保留；请检查系统密钥存储后重启应用。';
+        _resultSuccess = false;
+      }
     });
     final log = await SettingsService.loadLog();
     if (!mounted) return;
@@ -234,6 +255,25 @@ class _HomePageState extends State<HomePage> {
         customUa: _customUaCtrl.text.trim(),
         remember: _remember,
       );
+
+  Future<void> _setRemember(bool value) async {
+    if (_operationActive) return;
+    final previous = _remember;
+    setState(() {
+      _remember = value;
+      _savingCredentials = true;
+    });
+    try {
+      await _saveSettings();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _remember = previous);
+        _showSnack('密码保存设置失败，请检查系统安全存储后重试');
+      }
+    } finally {
+      if (mounted) setState(() => _savingCredentials = false);
+    }
+  }
 
   void _showSnack(String message) {
     ScaffoldMessenger.of(
@@ -722,11 +762,9 @@ class _HomePageState extends State<HomePage> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('记住账号密码'),
-              subtitle: const Text('明文保存在本机配置文件，仅建议个人设备使用'),
+              subtitle: const Text('密码由系统安全存储加密保存，取消后删除已保存密码'),
               value: _remember,
-              onChanged: _operationActive
-                  ? null
-                  : (value) => setState(() => _remember = value),
+              onChanged: _operationActive ? null : _setRemember,
             ),
           ],
         ),

@@ -10,5 +10,6 @@
     <Compile Include="../windows-lite/AuthClient.cs" Link="AuthClient.cs" />
     <Compile Include="../windows-lite/MainForm.cs" Link="MainForm.cs" />
     <Compile Include="../windows-lite/NetworkAdapter.cs" Link="NetworkAdapter.cs" />
+    <Compile Include="../windows-lite/WindowsSecretFile.cs" Link="WindowsSecretFile.cs" />
   </ItemGroup>
 </Project>

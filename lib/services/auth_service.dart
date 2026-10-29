@@ -6,6 +6,8 @@ import '../utils/aes_crypto.dart';
 import '../utils/form_builder.dart';
 import '../utils/html_parser.dart';
 import 'network_adapter_service.dart';
+import 'secret_store.dart';
+import 'portal_cookie_store.dart';
 
 /// 认证结果
 class LoginResult {
@@ -67,10 +69,10 @@ enum OnlineStatus { online, offline, unknown }
 ///    - resultCode=40：跟随服务器要求跳转后重试
 ///    - 其余错误码直接返回服务器提示
 ///
-/// 整个流程复用同一个 HttpClient（自动携带 Cookie 会话），
-/// 与浏览器行为保持一致。
+/// 整个流程复用同一个 HttpClient；门户 Cookie 显式附加并加密持久化。
 class AuthService {
   AuthService({
+    this.secretStore,
     this.baseUrl = 'http://100.100.9.2',
     this.wlanAcName = 'GiWiFi_lnsfHG',
     this.timeout = const Duration(seconds: 10),
@@ -82,6 +84,7 @@ class AuthService {
   });
 
   final String baseUrl;
+  final SecretStore? secretStore;
   final String wlanAcName;
   final Duration timeout;
   final NetworkAdapter? networkAdapter;
@@ -99,6 +102,8 @@ class AuthService {
 
   HttpClient? _session;
   HttpClient? _activeClient;
+  PortalCookieStore? _cookieStore;
+  String? _cookieUserAgent;
   bool _cancelled = false;
 
   bool get isCancelled => _cancelled;
@@ -159,6 +164,26 @@ class AuthService {
 
   /// 整个认证流程期间复用的会话客户端（自动携带 Cookie）。
   HttpClient get _client => _session ??= _createClient();
+
+  Future<PortalCookieStore> _cookiesFor(String userAgent) async {
+    if (_cookieUserAgent != userAgent) {
+      _session?.close(force: true);
+      _session = null;
+      _cookieUserAgent = userAgent;
+      _cookieStore = PortalCookieStore(
+        baseUrl: baseUrl,
+        userAgent: userAgent,
+        adapterIdentity: networkAdapter == null
+            ? ''
+            : '${networkAdapter!.name}\n${networkAdapter!.address}',
+        secrets: secretStore ?? SecretStores.current,
+      );
+    }
+    final store = _cookieStore!;
+    await store.load().timeout(timeout);
+    _checkCancelled();
+    return store;
+  }
 
   /// 相对路径/绝对 URL 统一解析。
   String _abs(String pathOrUrl) =>
@@ -562,6 +587,7 @@ class AuthService {
 
   /// 当前设备在线状态。
   /// 登录页在 PC 端无论在线与否都渲染表单，不能作为依据；
+  ///
   /// 以 logout 页是否下发 si 为准确信号。
   Future<OnlineStatus> checkOnline(String userAgent) async {
     await _validateNetwork();
@@ -595,7 +621,11 @@ class AuthService {
         body: 'si=${Uri.encodeComponent(si)}',
       );
       final json = jsonDecode(body) as Map<String, dynamic>;
-      return json['status'] == 1;
+      if (json['status'] != 1) return false;
+      await (await _cookiesFor(userAgent)).clear();
+      _session?.close(force: true);
+      _session = null;
+      return true;
     } catch (_) {
       return false;
     }
@@ -611,9 +641,13 @@ class AuthService {
     var current = url;
     for (var hop = 0; hop <= maxRedirects; hop++) {
       await _validateNetwork();
+      final cookies = await _cookiesFor(userAgent);
       final client = _client;
       _activeClient = client;
-      final req = await client.getUrl(Uri.parse(current)).timeout(timeout);
+      final uri = Uri.parse(current);
+      final req = await client.getUrl(uri).timeout(timeout);
+      req.followRedirects = false;
+      cookies.apply(req, uri);
       req.headers.set(HttpHeaders.userAgentHeader, userAgent);
       req.headers.set(
         HttpHeaders.acceptHeader,
@@ -621,6 +655,7 @@ class AuthService {
       );
       final resp = await req.close().timeout(timeout);
       _checkCancelled();
+      await cookies.capture(resp, uri).timeout(timeout);
       final location = resp.headers.value(HttpHeaders.locationHeader);
       if (resp.isRedirect && location != null) {
         await resp.drain<void>();
@@ -651,11 +686,14 @@ class AuthService {
     var useGet = false;
     for (var hop = 0; hop <= maxRedirects; hop++) {
       await _validateNetwork();
+      final cookies = await _cookiesFor(userAgent);
       final client = _client;
       _activeClient = client;
       final uri = Uri.parse(current);
       final req = await (useGet ? client.getUrl(uri) : client.postUrl(uri))
           .timeout(timeout);
+      req.followRedirects = false;
+      cookies.apply(req, uri);
       req.headers.set(HttpHeaders.userAgentHeader, userAgent);
       req.headers.set('X-Requested-With', 'XMLHttpRequest');
       req.headers.set(
@@ -668,6 +706,7 @@ class AuthService {
       }
       final resp = await req.close().timeout(timeout);
       _checkCancelled();
+      await cookies.capture(resp, uri).timeout(timeout);
       final location = resp.headers.value(HttpHeaders.locationHeader);
       if (resp.isRedirect && location != null) {
         await resp.drain<void>();

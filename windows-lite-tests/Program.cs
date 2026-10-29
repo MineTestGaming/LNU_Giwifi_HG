@@ -66,17 +66,21 @@ else
         }
     }, timeout.Token);
     var url = $"http://{endpoint.Address}:{endpoint.Port}";
-    using (var client = new AuthClient(url, timeout.Token, "test", adapter.Id, adapter.Address))
+    var cookieDirectory = Path.Combine(Path.GetTempPath(), $"giwifi-cookie-test-{Guid.NewGuid():N}");
+    using (var client = new AuthClient(url, timeout.Token, "test", adapter.Id, adapter.Address, cookieDirectory))
     {
         Assert(await client.CheckOnlineAsync("test-agent") == PortalStatus.Online, "bound portal status follows redirect");
         Assert(await client.CheckOnlineAsync("test-agent") == PortalStatus.Online, "same session can check again");
     }
-    using (var client = new AuthClient(url, timeout.Token, "test", adapter.Id, adapter.Address))
+    using (var client = new AuthClient(url, timeout.Token, "test", adapter.Id, adapter.Address, cookieDirectory))
         Assert(await client.CheckOnlineAsync("test-agent") == PortalStatus.Online, "new operation creates a fresh session");
     await server.WaitAsync(timeout.Token);
     Assert(sourceAddresses.All(ip => ip.Equals(endpoint.Address)), "all HTTP requests and redirects use selected source IPv4");
     Assert(requests[1].Contains("Cookie: session=test") && requests[2].Contains("Cookie: session=test"), "cookies persist within one authentication session");
-    Assert(!requests[3].Contains("Cookie:", StringComparison.OrdinalIgnoreCase), "cookies do not leak to the next operation");
+    Assert(requests[3].Contains("Cookie: session=test"), "encrypted cookies restore in the next operation");
+    var encryptedCookieFiles = Directory.GetFiles(cookieDirectory, "*.dpapi");
+    Assert(encryptedCookieFiles.Length == 1 && !Encoding.UTF8.GetString(File.ReadAllBytes(encryptedCookieFiles[0])).Contains("session=test"), "persisted cookie is encrypted");
+    Directory.Delete(cookieDirectory, recursive: true);
 
     using var cancelled = new CancellationTokenSource();
     cancelled.Cancel();

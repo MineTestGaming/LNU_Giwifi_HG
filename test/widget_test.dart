@@ -6,9 +6,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:giwifi_ua_switcher/main.dart';
 import 'package:giwifi_ua_switcher/pages/home_page.dart';
 import 'package:giwifi_ua_switcher/services/settings_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
 import 'package:giwifi_ua_switcher/theme.dart';
+import 'support/memory_secret_store.dart';
+import 'support/pump_settings.dart';
 
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   for (final brightness in Brightness.values) {
     testWidgets('窄屏大字号：设备、表单和高级设置可用（${brightness.name}）',
         (WidgetTester tester) async {
@@ -30,6 +35,7 @@ void main() {
         ),
         home: const HomePage(),
       ));
+      await waitForSettings(tester);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
@@ -99,6 +105,7 @@ void main() {
     });
 
     await tester.pumpWidget(const GiWiFiApp());
+    await waitForSettings(tester);
     await tester.pumpAndSettle();
 
     expect(find.text('GiWiFi 一键认证'), findsOneWidget);
@@ -132,11 +139,62 @@ void main() {
     });
 
     await tester.pumpWidget(const GiWiFiApp());
+    await waitForSettings(tester);
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('检查状态'));
     await tester.pumpAndSettle();
 
     expect(find.text('状态未知（可能不在校园网）'), findsOneWidget);
+  });
+
+  testWidgets('取消记住立即删除已保存密码，无需再次登录', (tester) async {
+    tester.view.physicalSize = const Size(1000, 2200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final tmp = Directory.systemTemp.createTempSync('giwifi_forget_password');
+    SettingsService.configDirOverride = tmp.path;
+    addTearDown(() async {
+      SettingsService.configDirOverride = null;
+      for (var attempt = 0;; attempt++) {
+        try {
+          await tmp.delete(recursive: true);
+          break;
+        } on FileSystemException {
+          if (attempt == 20) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+    });
+    await tester.runAsync(() => SettingsService.saveLoginInfo(
+          username: 'student',
+          password: 'private-pass',
+          serverUrl: 'http://100.100.9.2',
+          profileId: 'pc',
+          customUa: '',
+          remember: true,
+        ));
+    await tester.pumpWidget(const GiWiFiApp());
+    final switchFinder = find.widgetWithText(SwitchListTile, '记住账号密码');
+    for (var i = 0; i < 100; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+      if (tester.widget<SwitchListTile>(switchFinder).onChanged != null) break;
+    }
+    await tester.tap(switchFinder);
+    await tester.pump();
+    for (var i = 0; i < 100; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+      if (tester.widget<SwitchListTile>(switchFinder).onChanged != null) break;
+    }
+    expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+    expect((SecretStores.override as MemorySecretStore).values, isEmpty);
+    final saved = await tester.runAsync(SettingsService.loadLoginInfo);
+    expect(saved![SettingsService.kRemember], isFalse);
+    expect(saved[SettingsService.kPassword], '');
+    await tester.pumpWidget(const SizedBox());
   });
 }

@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:giwifi_ua_switcher/services/auth_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
+import 'support/memory_secret_store.dart';
 
 String _formPage() => '''
 <html><body>
@@ -18,6 +20,8 @@ String _formPage() => '''
 ''';
 
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   test('移动端 UA：首页无表单时自动降级到 pagetype=login 再认证', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final base = 'http://127.0.0.1:${server.port}';

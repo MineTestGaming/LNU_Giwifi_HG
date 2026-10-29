@@ -9,7 +9,7 @@ internal static class UiChecks
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try { CheckForm(); }
+            try { CheckForm(); CheckCredentialMigration(); }
             catch (Exception ex) { failure = ex; }
         });
         thread.SetApartmentState(ApartmentState.STA);
@@ -51,7 +51,7 @@ internal static class UiChecks
             combo.SelectedIndex = 0;
             using var saved = JsonDocument.Parse(File.ReadAllText(path));
             Assert(saved.RootElement.GetProperty("network_adapter_id").GetString() == "", "switching to system default persists independently of credentials");
-            Assert(saved.RootElement.GetProperty("password").GetString() == "", "credentials remain absent when remember is disabled");
+            Assert(!saved.RootElement.TryGetProperty("password", out _), "credentials remain absent when remember is disabled");
             var acName = Field<ComboBox>("_acName");
             Assert(acName.DropDownStyle == ComboBoxStyle.DropDown, "AC name supports custom input");
             Assert(acName.Text == "GiWiFi_lnsfHG (湖光)", "default AC name shows Huguang campus");
@@ -78,5 +78,47 @@ internal static class UiChecks
             Console.WriteLine("UI preview: " + imagePath);
         }
         finally { File.Delete(path); }
+    }
+
+    private static void CheckCredentialMigration()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"giwifi-legacy-{Guid.NewGuid():N}.json");
+        var secretPath = path + ".password.dpapi";
+        File.WriteAllText(path, """
+            {"username":"test-student","password":"legacy-private-password","remember":true}
+            """);
+        try
+        {
+            using (var form = new MainForm(path))
+            {
+                var password = (TextBox)typeof(MainForm).GetField("_password", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)!;
+                if (password.Text != "legacy-private-password") throw new Exception("legacy password migration loses password");
+            }
+            if (File.ReadAllText(path).Contains("legacy-private-password")) throw new Exception("legacy plaintext remains in settings");
+            if (!File.Exists(secretPath) || System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(secretPath)).Contains("legacy-private-password"))
+                throw new Exception("password file is not encrypted");
+            using (var form = new MainForm(path))
+            {
+                var password = (TextBox)typeof(MainForm).GetField("_password", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)!;
+                if (password.Text != "legacy-private-password") throw new Exception("protected password cannot be restored");
+            }
+            Console.WriteLine("PASS: legacy password migrates to DPAPI, leaves no JSON plaintext, and restores after restart");
+
+            File.Delete(secretPath);
+            Directory.CreateDirectory(secretPath);
+            const string original = """{"username":"test-student","password":"must-survive-failed-migration","remember":true}""";
+            File.WriteAllText(path, original);
+            using (var form = new MainForm(path))
+                typeof(MainForm).GetMethod("SaveSettings", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(form, null);
+            if (File.ReadAllText(path) != original) throw new Exception("failed migration overwrites legacy credentials");
+            Directory.Delete(secretPath);
+            Console.WriteLine("PASS: failed protected write preserves legacy settings and blocks subsequent overwrite");
+        }
+        finally
+        {
+            File.Delete(path);
+            if (Directory.Exists(secretPath)) Directory.Delete(secretPath);
+            else File.Delete(secretPath);
+        }
     }
 }

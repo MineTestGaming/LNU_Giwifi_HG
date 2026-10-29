@@ -6,7 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:giwifi_ua_switcher/pages/home_page.dart';
 import 'package:giwifi_ua_switcher/services/settings_service.dart';
+import 'package:giwifi_ua_switcher/services/secret_store.dart';
+import 'support/memory_secret_store.dart';
+import 'support/pump_settings.dart';
 import 'package:giwifi_ua_switcher/theme.dart';
+
+String _golden(String name) =>
+    'goldens/${Platform.isLinux ? 'linux/' : ''}$name';
 
 /// 使用应用真实字体与完整图标字体，避免新增字符和图标在截图中缺失。
 Future<void> _loadUiFonts() async {
@@ -15,6 +21,12 @@ Future<void> _loadUiFonts() async {
     ..addFont(rootBundle.load('assets/fonts/mi_sans_medium.ttf'))
     ..addFont(rootBundle.load('assets/fonts/mi_sans_bold.ttf'));
   await uiLoader.load();
+  final latinLoader = FontLoader('GoogleSans')
+    ..addFont(rootBundle
+        .load('assets/fonts/GoogleSans-VariableFont_GRAD,opsz,wght.ttf'))
+    ..addFont(rootBundle.load(
+        'assets/fonts/GoogleSans-Italic-VariableFont_GRAD,opsz,wght.ttf'));
+  await latinLoader.load();
   final iconLoader = FontLoader('MaterialIcons')
     ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
   await iconLoader.load();
@@ -32,10 +44,13 @@ Future<void> _pumpApp(WidgetTester tester, Size size,
       home: const HomePage(),
     ),
   );
+  await waitForSettings(tester);
   await tester.pumpAndSettle();
 }
 
 void main() {
+  setUp(() => SecretStores.override = MemorySecretStore());
+  tearDown(() => SecretStores.override = null);
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await _loadUiFonts();
@@ -58,7 +73,7 @@ void main() {
     await tester.pumpAndSettle();
     await expectLater(
       find.byType(HomePage),
-      matchesGoldenFile('goldens/home_desktop.png'),
+      matchesGoldenFile(_golden('home_desktop.png')),
     );
   });
 
@@ -68,7 +83,7 @@ void main() {
     await tester.pumpAndSettle();
     await expectLater(
       find.byType(HomePage),
-      matchesGoldenFile('goldens/home_mobile.png'),
+      matchesGoldenFile(_golden('home_mobile.png')),
     );
   });
 
@@ -76,7 +91,7 @@ void main() {
     await _pumpApp(tester, const Size(420, 920), brightness: Brightness.dark);
     await expectLater(
       find.byType(HomePage),
-      matchesGoldenFile('goldens/home_mobile_dark.png'),
+      matchesGoldenFile(_golden('home_mobile_dark.png')),
     );
   });
 }
