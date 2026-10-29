@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/bond_controller.dart';
 
+// 多网卡链路聚合的Card
+// 后台方法是bond_controller.dart
+
 class BondCard extends StatefulWidget {
   const BondCard(
       {super.key,
@@ -49,6 +52,7 @@ class _BondCardState extends State<BondCard> {
     }
   }
 
+  // 创建原生网卡聚合的弹窗
   Future<void> _start() async {
     final confirmed = await showDialog<bool>(
         context: context,
@@ -71,6 +75,7 @@ class _BondCardState extends State<BondCard> {
     if (confirmed == true && mounted) await _run(widget.controller.start);
   }
 
+  // 多网卡链路聚合的Card
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: widget.controller,

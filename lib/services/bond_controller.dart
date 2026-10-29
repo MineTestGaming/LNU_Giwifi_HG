@@ -78,6 +78,7 @@ class BondController extends ChangeNotifier {
   final Future<void> Function(BondSession?) saveSession;
   final DateTime Function() now;
   static const evidenceLifetime = Duration(seconds: 60);
+  static const startValidationRetries = 3;
 
   BondCapability capability = const BondCapability('正在检测原生绑定能力…', {});
   final Map<NetworkAdapter, AdapterCheck> checks = {};
@@ -94,6 +95,14 @@ class BondController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  // 网卡能否使用原生的链路聚合的条件
+  //    -不能被占用，可能占用的情况：
+  //        - 正在检测
+  //        - 正在停止
+  //    - 可用
+  //        - 不能是回环网卡
+  //    - 没有兼容性问题
+  //    - 在校园网在线
   bool canSelect(NetworkAdapter adapter) {
     final check = checks[adapter];
     return !busy &&
@@ -104,6 +113,11 @@ class BondController extends ChangeNotifier {
         now().difference(check!.time) < evidenceLifetime;
   }
 
+  // 刷新网卡
+  // 这个是检查网卡是否支持原生绑定的
+  // 在手动刷新网卡和加载完成后触发
+  // 调用链为 NetworkAdapterService.listAvailable -> BondController.refresh
+  // 会筛掉刷新后不存在的网卡以及不兼容的网卡
   Future<void> refresh(List<NetworkAdapter> values) async {
     if (busy || session != null) return;
     busy = true;
@@ -125,6 +139,7 @@ class BondController extends ChangeNotifier {
     }
   }
 
+  // 清除测试结果
   void invalidateChecks() {
     checks.clear();
     _selected.clear();
@@ -141,9 +156,12 @@ class BondController extends ChangeNotifier {
     _notify();
   }
 
+  // 检查网卡的内部实现
   Future<OnlineStatus> _check(NetworkAdapter adapter) async {
     try {
+      // 网卡必须有效，不能是回环网卡
       await adapters.validate(adapter);
+      // 网卡必须在校园网上限
       final status = await checkOnline(adapter);
       checks[adapter] = AdapterCheck(status, now());
       if (status != OnlineStatus.online) _selected.remove(adapter);
@@ -155,6 +173,7 @@ class BondController extends ChangeNotifier {
     }
   }
 
+  // 上一个方法对外暴露的接口
   Future<void> check(NetworkAdapter adapter) async {
     if (busy || session != null) return;
     busy = true;
@@ -167,6 +186,7 @@ class BondController extends ChangeNotifier {
     }
   }
 
+  // 检测所有网卡
   Future<void> checkAll() async {
     if (busy || session != null) return;
     busy = true;
@@ -185,6 +205,7 @@ class BondController extends ChangeNotifier {
     }
   }
 
+  // 开始链路聚合
   Future<void> start() async {
     if (busy || session != null) throw const BondException('已有聚合操作或待恢复记录');
     final members = selected;
@@ -196,26 +217,57 @@ class BondController extends ChangeNotifier {
     message = '正在重新验证成员认证状态…';
     _notify();
     try {
+      // 在聚合过程重新检查是否支持
       capability = await backend.inspect(members);
       for (final a in members) {
         final reason = capability.reason(a);
         if (reason != null) throw BondException('${a.name}：$reason');
-        if (await _check(a) != OnlineStatus.online) {
-          throw BondException('${a.name} 未确认在线，已取消聚合');
+      }
+
+      BondSession? plan;
+      var lastFailure = '网卡认证状态已过期';
+      for (var attempt = 1; attempt <= startValidationRetries + 1; attempt++) {
+        message = '正在重新验证成员认证状态（第 $attempt 轮）…';
+        _notify();
+
+        // Check every selected member in every attempt, even after one fails.
+        final statuses = <NetworkAdapter, OnlineStatus>{};
+        for (final adapter in members) {
+          statuses[adapter] = await _check(adapter);
         }
+        final failed = members
+            .where((adapter) => statuses[adapter] != OnlineStatus.online)
+            .toList();
+        if (failed.isNotEmpty) {
+          lastFailure = '${failed.map((a) => a.name).join('、')} 未确认在线';
+          continue;
+        }
+
+        // An earlier member's evidence can expire while checking later ones.
+        final expiresAt = members
+            .map((a) => checks[a]!.time.add(evidenceLifetime))
+            .reduce((a, b) => a.isBefore(b) ? a : b);
+        if (!now().isBefore(expiresAt)) {
+          lastFailure = '网卡认证状态在检测期间过期';
+          continue;
+        }
+
+        final candidate = await backend.prepare(members);
+        if (!now().isBefore(expiresAt)) {
+          lastFailure = '系统配置检测期间网卡认证状态过期';
+          continue;
+        }
+        plan = candidate;
+        break;
       }
-      // The first check may expire while later interfaces are timing out.
-      if (members
-          .any((a) => now().difference(checks[a]!.time) >= evidenceLifetime)) {
-        throw const BondException('网卡认证状态已过期，请重新检测');
+
+      if (plan == null) {
+        throw BondException(
+            '初次检测并重试 $startValidationRetries 次后仍未通过，$lastFailure；已取消聚合');
       }
-      final plan = await backend.prepare(members);
       final expiresAt = members
           .map((a) => checks[a]!.time.add(evidenceLifetime))
           .reduce((a, b) => a.isBefore(b) ? a : b);
-      if (!now().isBefore(expiresAt)) {
-        throw const BondException('系统配置检测期间认证证据已过期，请重新检测');
-      }
       final prepared = BondSession(id: plan.id, members: plan.members, data: {
         ...plan.data,
         'authExpiresAt': expiresAt.millisecondsSinceEpoch ~/ 1000
@@ -249,6 +301,7 @@ class BondController extends ChangeNotifier {
     }
   }
 
+  // 恢复未聚合状态
   Future<void> _restore() async {
     active = false;
     bondAdapter = null;
