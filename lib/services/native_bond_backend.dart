@@ -12,6 +12,13 @@ enum BondPlatform { windows, macos, linux, unsupported }
 String shellQuote(String value) => "'${value.replaceAll("'", "'\"'\"'")}'";
 String powershellQuote(String value) => "'${value.replaceAll("'", "''")}'";
 
+BondPlatform _detectBondPlatform() => switch (Platform.operatingSystem) {
+      'windows' => BondPlatform.windows,
+      'macos' => BondPlatform.macos,
+      'linux' => BondPlatform.linux,
+      _ => BondPlatform.unsupported,
+    };
+
 class NativeMember {
   const NativeMember(
       {required this.adapter,
@@ -39,14 +46,7 @@ class NativeBondBackend implements BondBackend {
       {BondPlatform? platform,
       Future<ProcessResult> Function(String, List<String>)? run,
       this.listMembers})
-      : platform = platform ??
-            (Platform.isWindows
-                ? BondPlatform.windows
-                : Platform.isMacOS
-                    ? BondPlatform.macos
-                    : Platform.isLinux
-                        ? BondPlatform.linux
-                        : BondPlatform.unsupported),
+      : platform = platform ?? _detectBondPlatform(),
         run = run ?? _run;
 
   final BondPlatform platform;
@@ -54,6 +54,7 @@ class NativeBondBackend implements BondBackend {
   final Future<List<NativeMember>> Function()? listMembers;
   String? _unsupported;
 
+  // 在Windows上启动进程的方法
   static Future<ProcessResult> _run(
       String executable, List<String> args) async {
     // On Windows explicitly hide helper windows; no networking commands run
@@ -70,6 +71,7 @@ class NativeBondBackend implements BondBackend {
     return ProcessResult(process.pid, code, await stdout, await stderr);
   }
 
+  // 回读Windows执行文件返回值
   Future<String> _read(String executable, List<String> args) async {
     final result =
         await run(executable, args).timeout(const Duration(seconds: 15));
@@ -79,6 +81,7 @@ class NativeBondBackend implements BondBackend {
     return result.stdout.toString().trim();
   }
 
+  // 通过Windows Powershell启动
   Future<String> _ps(String script) => _read('powershell.exe', [
         '-NoProfile',
         '-NonInteractive',
@@ -117,13 +120,22 @@ $unavailable = $null
 $members = @()
 try {
 ''' +
-        _windowsLbfoPrerequisites() +
+        _windowsTeamPrerequisites() +
         r'''
-  $teams = @(Get-NetLbfoTeamMember -ErrorAction Stop)
+  if ($teamKind -eq 'LBFO') {
+    $teams = @(Get-NetLbfoTeamMember -ErrorAction Stop)
+  } else {
+    $teams = @(Get-NetSwitchTeamMember -ErrorAction Stop)
+  }
   foreach ($a in Get-NetAdapter -Physical) {
     $reason = $null
     if ($a.Status -ne 'Up' -or $a.MediaType -ne '802.3') { $reason = '仅支持已连接的物理以太网卡' }
-    if ($teams | Where-Object Name -eq $a.Name) { $reason = '此网卡已属于其他 LBFO Team' }
+    if ($teams | Where-Object Name -eq $a.Name) { $reason = '此网卡已属于其他 Team' }
+    if ($teamKind -eq 'Switch') {
+      $teamProtocol = @(Get-NetAdapterBinding -Name $a.Name -AllBindings -ErrorAction Stop |
+        Where-Object { $_.Enabled -and ($_.DisplayName -match 'Teaming Protocol' -or $_.ComponentID -match 'team') })
+      if ($teamProtocol.Count -eq 0) { $reason = '此网卡驱动未提供或未启用 Teaming Protocol，Windows 客户端无法使用 SwitchTeam' }
+    }
     $ipif = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4
     if ($ipif.Dhcp -ne 'Enabled') { $reason = '仅支持 DHCP，静态地址不加入聚合' }
     $gateway = (Get-NetIPConfiguration -InterfaceIndex $a.ifIndex).IPv4DefaultGateway.NextHop
@@ -134,7 +146,7 @@ try {
   }
   $supported = $true
 } catch {
-  $unavailable = "Windows Server LBFO 检测失败：$($_.Exception.Message)"
+  $unavailable = "Windows 原生 Team 检测失败：$($_.Exception.Message)"
   $members = @()
 }
 @{supported=$supported; reason=$unavailable; members=$members} | ConvertTo-Json -Depth 5 -Compress
@@ -144,7 +156,7 @@ try {
       final reason = json['reason'];
       _unsupported = reason is String && reason.trim().isNotEmpty
           ? reason
-          : '当前 Windows 不支持原生 LBFO Team：需 Windows Server 和 NetLbfo；Windows 10/11 客户端不支持。';
+          : '当前 Windows 缺少可用的原生 Team 组件：Server 需要 NetLbfo，客户端需要支持并启用 Teaming Protocol 的网卡驱动。';
       return [];
     }
     return [for (final row in json['members'] as List) _fromRow(row as Map)];
@@ -152,18 +164,33 @@ try {
 
   // Recheck in the elevated process because availability can change during UAC.
   // Recovery requires only the commands it uses, so it can work without New.
-  String _windowsLbfoPrerequisites({bool recovery = false}) {
-    final commands = [
+  String _windowsTeamPrerequisites({bool recovery = false}) {
+    final lbfoCommands = [
       'Get-NetLbfoTeam',
       'Get-NetLbfoTeamMember',
       if (!recovery) 'New-NetLbfoTeam',
       'Remove-NetLbfoTeam',
     ];
+    final switchCommands = [
+      'Get-NetSwitchTeam',
+      'Get-NetSwitchTeamMember',
+      if (!recovery) 'New-NetSwitchTeam',
+      'Remove-NetSwitchTeam',
+    ];
     return '''
-if ((Get-CimInstance Win32_OperatingSystem).ProductType -notin @(2, 3)) { throw 'LBFO 需要 Windows Server；Windows 10/11 客户端不支持本地 Team' }
-try { Import-Module -Name NetLbfo -ErrorAction Stop } catch { throw "NetLbfo 模块无法加载：\$(\$_.Exception.Message)" }
-foreach (\$command in @(${commands.map(powershellQuote).join(',')})) {
-  if (-not (Get-Command -Name \$command -Module NetLbfo -CommandType Cmdlet,Function -ErrorAction SilentlyContinue)) { throw "NetLbfo 缺少所需命令：\$command" }
+\$productType = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ProductOptions' -Name ProductType -ErrorAction Stop).ProductType
+if (\$productType -in @('ServerNT', 'LanmanNT')) {
+  \$teamKind = 'LBFO'
+  \$module = 'NetLbfo'
+  \$requiredCommands = @(${lbfoCommands.map(powershellQuote).join(',')})
+} else {
+  \$teamKind = 'Switch'
+  \$module = 'NetSwitchTeam'
+  \$requiredCommands = @(${switchCommands.map(powershellQuote).join(',')})
+}
+try { Import-Module -Name \$module -ErrorAction Stop } catch { throw "\$module 模块无法加载：\$(\$_.Exception.Message)" }
+foreach (\$command in \$requiredCommands) {
+  if (-not (Get-Command -Name \$command -Module \$module -CommandType Cmdlet,Function -ErrorAction SilentlyContinue)) { throw "\$module 缺少所需命令：\$command" }
 }
 ''';
   }
@@ -267,7 +294,7 @@ foreach (\$command in @(${commands.map(powershellQuote).join(',')})) {
 
   String get description => switch (platform) {
         BondPlatform.windows =>
-          'Windows Server：原生 LBFO Team / SwitchIndependent / Dynamic',
+          'Windows Server：LBFO Team；Windows 客户端：驱动支持的 SwitchTeam',
         BondPlatform.macos => 'macOS：原生 LACP；交换机端口须已配置 LACP',
         BondPlatform.linux => 'Linux：NetworkManager bond / balance-tlb（同一二层网络）',
         _ => '此平台不支持原生绑定',
@@ -435,8 +462,12 @@ foreach (\$command in @(${commands.map(powershellQuote).join(',')})) {
         return '''
 \$ErrorActionPreference = 'Stop'
 if ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -ge $expiry) { throw 'Authentication evidence expired during administrator authorization' }
-${_windowsLbfoPrerequisites()}
-if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) { throw 'Team name already exists' }
+${_windowsTeamPrerequisites()}
+if (\$teamKind -eq 'LBFO') {
+  if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) { throw 'Team name already exists' }
+} else {
+  if (Get-NetSwitchTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) { throw 'Team name already exists' }
+}
 ${[
           for (final row in rows)
             '''\$a = Get-NetAdapter -Name ${powershellQuote(row['name'] as String)}
@@ -444,9 +475,17 @@ if (-not \$a.HardwareInterface -or \$a.Status -ne 'Up' -or \$a.MediaType -ne '80
 if ((Get-NetIPInterface -InterfaceIndex \$a.ifIndex -AddressFamily IPv4).Dhcp -ne 'Enabled') { throw 'Member no longer uses DHCP' }
 if (-not (Get-NetIPAddress -InterfaceIndex \$a.ifIndex -AddressFamily IPv4 | Where-Object { \$_.IPAddress -eq ${powershellQuote(row['address'] as String)} -and \$_.PrefixLength -eq ${row['prefix']} })) { throw 'Member IPv4 changed' }
 if ((Get-NetIPConfiguration -InterfaceIndex \$a.ifIndex).IPv4DefaultGateway.NextHop -ne ${powershellQuote(row['gateway'] as String)}) { throw 'Member gateway changed' }
-if (Get-NetLbfoTeamMember | Where-Object Name -eq \$a.Name) { throw 'Member already teamed' }'''
+if (\$teamKind -eq 'LBFO') {
+  if (Get-NetLbfoTeamMember | Where-Object Name -eq \$a.Name) { throw 'Member already teamed' }
+} else {
+  if (Get-NetSwitchTeamMember | Where-Object Name -eq \$a.Name) { throw 'Member already teamed' }
+}'''
         ].join('\n')}
-New-NetLbfoTeam -Name ${powershellQuote(id)} -TeamMembers @($members) -TeamingMode SwitchIndependent -LoadBalancingAlgorithm Dynamic -Confirm:\$false | Out-Null
+if (\$teamKind -eq 'LBFO') {
+  New-NetLbfoTeam -Name ${powershellQuote(id)} -TeamMembers @($members) -TeamingMode SwitchIndependent -LoadBalancingAlgorithm Dynamic -Confirm:\$false | Out-Null
+} else {
+  New-NetSwitchTeam -Name ${powershellQuote(id)} -TeamMembers @($members) -ErrorAction Stop
+}
 Set-NetIPInterface -InterfaceAlias ${powershellQuote(id)} -AddressFamily IPv4 -Dhcp Enabled
 Disable-NetAdapterBinding -Name ${powershellQuote(id)} -ComponentID ms_tcpip6 | Out-Null
 ''';
@@ -499,12 +538,20 @@ ${[
       case BondPlatform.windows:
         return '''
 \$ErrorActionPreference = 'Stop'
-${_windowsLbfoPrerequisites(recovery: true)}
-if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) {
-  \$expected = @(${session.members.map((a) => powershellQuote(a.name)).join(',')})
-  \$actual = @(Get-NetLbfoTeamMember -Team ${powershellQuote(id)} | Select-Object -ExpandProperty Name)
-  if (@(Compare-Object \$expected \$actual).Count -ne 0) { throw 'Team ownership mismatch; manual recovery required' }
-  Remove-NetLbfoTeam -Name ${powershellQuote(id)} -Confirm:\$false
+${_windowsTeamPrerequisites(recovery: true)}
+\$expected = @(${session.members.map((a) => powershellQuote(a.name)).join(',')})
+if (\$teamKind -eq 'LBFO') {
+  if (Get-NetLbfoTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) {
+    \$actual = @(Get-NetLbfoTeamMember -Team ${powershellQuote(id)} | Select-Object -ExpandProperty Name)
+    if (@(Compare-Object \$expected \$actual).Count -ne 0) { throw 'Team ownership mismatch; manual recovery required' }
+    Remove-NetLbfoTeam -Name ${powershellQuote(id)} -Confirm:\$false
+  }
+} else {
+  if (Get-NetSwitchTeam -ErrorAction Stop | Where-Object Name -eq ${powershellQuote(id)}) {
+    \$actual = @(Get-NetSwitchTeamMember -Team ${powershellQuote(id)} | Select-Object -ExpandProperty Name)
+    if (@(Compare-Object \$expected \$actual).Count -ne 0) { throw 'Team ownership mismatch; manual recovery required' }
+    Remove-NetSwitchTeam -Name ${powershellQuote(id)} -Confirm:\$false
+  }
 }
 ${session.members.map((a) => 'Set-NetIPInterface -InterfaceAlias ${powershellQuote(a.name)} -AddressFamily IPv4 -Dhcp Enabled').join('\n')}
 ''';
@@ -622,7 +669,7 @@ exit \$p.ExitCode
             jsonDecode((await output.readAsString()).replaceFirst('\uFEFF', ''))
                 as Map;
         if (value['ok'] != true)
-          throw BondException('原生 LBFO Team 操作失败：${value['error']}');
+          throw BondException('Windows 原生 Team 操作失败：${value['error']}');
       } finally {
         await dir.delete(recursive: true);
       }
