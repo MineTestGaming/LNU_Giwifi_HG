@@ -205,7 +205,7 @@ foreach (\$command in \$requiredCommands) {
 
   Future<List<NativeMember>> _linuxMembers() async {
     if (!await File('/usr/bin/pkexec').exists()) {
-      _unsupported = 'Linux 原生绑定需要 pkexec 和桌面授权代理，请先安装 polkit。';
+      _unsupported = 'Linux 原生绑定需要 polkit 的 pkexec 命令和桌面授权代理；请按发行版说明安装。';
       return [];
     }
     await _read('/usr/bin/nmcli', ['-t', '-f', 'RUNNING', 'general']);

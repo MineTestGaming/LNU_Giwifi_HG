@@ -100,11 +100,12 @@ Flutter 使用 Dart 的源地址绑定，不设置 Windows 原生出口接口，
 
 | 平台 | 原生实现 | 前提 |
 | --- | --- | --- |
-| Windows Server | LBFO（NetLbfo）Team，SwitchIndependent + Dynamic | NetLbfo 模块可加载，查询、创建、删除命令完整；Windows 10/11 客户端显示不支持，装有管理命令也不能在本地创建 Team |
+| Windows Server | LBFO（NetLbfo）Team，SwitchIndependent + Dynamic | NetLbfo 模块可加载，查询、创建、删除命令完整 |
+| Windows 10/11 Pro | SwitchTeam（NetSwitchTeam） | 查询、创建、删除命令完整；每张成员网卡均需驱动提供并启用 Teaming Protocol。该客户端方案依赖网卡厂商驱动，不保证所有网卡支持 |
 | macOS | networksetup，LACP | 至少两张支持 Bond 的以太网卡，交换机对应端口已经配置 LACP |
 | Linux | NetworkManager bond，balance-tlb | NetworkManager、nmcli、pkexec 和图形授权代理可用；成员必须是物理以太网 |
 
-Windows Server 的 LBFO 支持会检查 `Get-NetLbfoTeam`、`Get-NetLbfoTeamMember`、`New-NetLbfoTeam` 和 `Remove-NetLbfoTeam`，接受 NetLbfo 模块导出的 CIM 函数命令。模块缺失、命令不完整或查询失败时，卡片显示具体原因并禁用成员选择；创建与恢复获得管理员授权后会再次检查。恢复只依赖查询和删除命令，成员匹配后才删除本次 Team 并恢复 DHCP；查询失败时保留恢复记录供重试。默认 SwitchIndependent 模式不要求交换机配置 LACP，但仍需满足下述网络与认证条件。
+Windows Server 使用 LBFO；Windows 10/11 Pro 使用 `NetSwitchTeam`，并在能力检测时检查网卡是否启用了驱动提供的 Teaming Protocol（例如帖子中提到的 Realtek Teaming Protocol Driver）。客户端 Teaming 属于驱动相关能力，命令存在本身不足以证明网卡可组队。两条路径都会检查对应模块的查询、创建、删除命令；创建与恢复获得管理员授权后再次检查。恢复会核对 Team 成员，匹配后才删除本次 Team 并恢复 DHCP；查询失败时保留恢复记录供重试。Server 的 LBFO 默认 SwitchIndependent 模式不要求交换机配置 LACP；客户端的 SwitchTeam 行为取决于驱动实现。两者仍需满足下述网络与认证条件。
 
 当前只支持 DHCP IPv4、相同子网和相同网关的成员；Wi-Fi、VPN/TUN、桥接、静态 IP 和其他绑定中的成员不加入。相同子网/网关只是必要条件，实际还需处于兼容的二层网络。原生绑定不能合并两个独立运营商的出口。本次不提供代理或隧道降级。Linux balance-tlb 主要分摊发送负载，接收由一个成员处理，不能据此承诺下载带宽叠加；单个连接的速度仍受绑定模式、驱动和网络条件影响。
 
@@ -116,7 +117,7 @@ macOS 分发应用为调用系统管理员授权工具关闭了 App Sandbox，�
 
 Linux 工程已包含在 `linux/`，在 Linux 上配置 Flutter 桌面工具链后运行 `flutter build linux --release`。代码回归可运行 `flutter test` 和 `flutter analyze`；真实聚合需在有至少两张已认证兼容网卡的平台逐项验证：创建成功、LACP/DHCP 失败回滚、取消授权、认证掉线、停止恢复、进程中断后恢复。开发测试不执行真实网卡绑定。
 
-平台依据：[Microsoft NetLbfo](https://learn.microsoft.com/en-us/powershell/module/netlbfo/?view=windowsserver2025-ps)、[Apple 原生 LACP](https://support.apple.com/en-ph/guide/mac-help/mchlp2798/mac)、[Linux bonding 模式](https://www.kernel.org/doc/html/v5.15/networking/bonding.html)、[NetworkManager 绑定配置](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli-examples.html)。
+平台依据：[Microsoft NetLbfo](https://learn.microsoft.com/en-us/powershell/module/netlbfo/?view=windowsserver2025-ps)、[Microsoft NetSwitchTeam](https://learn.microsoft.com/en-us/powershell/module/netswitchteam/?view=windowsserver2022-ps)、[Windows 10 Pro + Realtek Teaming Protocol 社区案例](https://linustechtips.com/topic/1003888-nic-teaming-windows-10-works/)、[Apple 原生 LACP](https://support.apple.com/en-ph/guide/mac-help/mchlp2798/mac)、[Linux bonding 模式](https://www.kernel.org/doc/html/v5.15/networking/bonding.html)、[NetworkManager 绑定配置](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli-examples.html)。
 
 开发验证（无需校园网账号；HTTP 测试仅访问本机模拟门户）：
 

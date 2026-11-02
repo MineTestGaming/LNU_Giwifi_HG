@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/auth_service.dart';
 import '../services/bond_controller.dart';
@@ -52,6 +53,16 @@ class _BondCardState extends State<BondCard> {
     }
   }
 
+  Future<void> _openPolkitWiki() async {
+    final uri = Uri.parse('https://wiki.archlinuxcn.org/wiki/Polkit');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
+        mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法打开 Polkit Wiki 链接')),
+      );
+    }
+  }
+
   // 创建原生网卡聚合的弹窗
   Future<void> _start() async {
     final confirmed = await showDialog<bool>(
@@ -94,6 +105,20 @@ class _BondCardState extends State<BondCard> {
                         style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
                     Text(c.capability.description),
+                    if (Theme.of(context).platform == TargetPlatform.linux) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Linux 原生绑定需要 polkit 提供 pkexec 和桌面授权代理。请按发行版说明通过包管理器安装，避免下载不匹配的安装包。',
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _openPolkitWiki,
+                          icon: const Icon(Icons.open_in_new),
+                          label: const Text('查阅 ArchWiki：Polkit'),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     const Text('先检测各网卡，仅已确认认证在线的网卡可勾选。状态有效期 60 秒，创建前会重新验证。'),
                     for (final adapter in c.available)

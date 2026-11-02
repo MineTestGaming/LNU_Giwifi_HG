@@ -40,14 +40,44 @@ void main() {
         backend.prepare([missing, b]), throwsA(isA<BondException>()));
   });
 
-  test('Windows 客户端即使装有 NetLbfo 命令也显示不支持', () async {
+  test('Windows 平台探测失败时禁用绑定成员', () async {
     final backend = NativeBondBackend(
         platform: BondPlatform.windows,
         run: (_, __) async =>
             ProcessResult(0, 0, '{"supported":false,"members":[]}', ''));
     final capability = await backend.inspect([a, b]);
-    expect(capability.description, contains('Windows 10/11'));
+    expect(capability.description, contains('原生 Team'));
     expect(capability.reason(a), isNotNull);
+  });
+
+  test('Windows 脚本按系统类型选择 LBFO 或 SwitchTeam 并能恢复', () {
+    final backend = NativeBondBackend(platform: BondPlatform.windows);
+    final session = BondSession(id: 'gw12345678', members: const [
+      a,
+      b
+    ], data: {
+      'platform': 'windows',
+      'authExpiresAt': 9999999999,
+      'members': [
+        for (final adapter in [a, b])
+          NativeMember(
+            adapter: adapter,
+            prefix: 24,
+            gateway: '192.0.2.254',
+            restoreId: adapter.name,
+          ).toJson(),
+      ],
+    });
+    final create = backend.buildCreateScript(session);
+    final remove = backend.buildRemoveScript(session);
+
+    expect(create, contains("\$teamKind = 'LBFO'"));
+    expect(create, contains('New-NetLbfoTeam'));
+    expect(create, contains('New-NetSwitchTeam'));
+    expect(create, contains('Get-NetAdapterBinding'));
+    expect(remove, contains('Remove-NetLbfoTeam'));
+    expect(remove, contains('Remove-NetSwitchTeam'));
+    expect(remove, contains('Get-NetSwitchTeamMember'));
   });
 
   test('恢复记录不匹配时绝不调用系统命令', () async {

@@ -14,6 +14,9 @@ android/.gradle/
 android/local.properties
 android/key.properties
 
+# nodejs
+node_modules/
+
 # misc
 *.log
 .DS_Store
