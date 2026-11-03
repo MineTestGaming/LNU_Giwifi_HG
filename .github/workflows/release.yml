@@ -33,6 +33,7 @@ jobs:
               with:
                   channel: stable
                   cache: true
+            - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
             - run: flutter config --enable-linux-desktop
             - run: flutter pub get
             - run: flutter build linux --release
@@ -60,7 +61,7 @@ jobs:
                   path: dist/*.zip
 
     macos:
-        runs-on: macos-latest
+        runs-on: macos-15
         steps:
             - uses: actions/checkout@v4
             - uses: subosito/flutter-action@v2
@@ -77,7 +78,7 @@ jobs:
                   path: dist/*.zip
 
     ios:
-        runs-on: macos-latest
+        runs-on: macos-15
         steps:
             - uses: actions/checkout@v4
             - uses: subosito/flutter-action@v2
@@ -91,22 +92,6 @@ jobs:
               with:
                   name: ios-unsigned
                   path: dist/*.zip
-
-    web:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - uses: subosito/flutter-action@v2
-              with:
-                  channel: stable
-                  cache: true
-            - run: flutter pub get
-            - run: flutter build web --release
-            - run: mkdir -p dist && tar -czf dist/LNU-Giwifi-HG-web-${GITHUB_REF_NAME}.tar.gz -C build web
-            - uses: actions/upload-artifact@v4
-              with:
-                  name: web
-                  path: dist/*.tar.gz
 
     release:
         needs: [android, linux, windows, macos, ios, web]
