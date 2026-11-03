@@ -94,7 +94,7 @@ jobs:
                   path: dist/*.zip
 
     release:
-        needs: [android, linux, windows, macos, ios, web]
+        needs: [android, linux, windows, macos, ios]
         runs-on: ubuntu-latest
         steps:
             - uses: actions/download-artifact@v4
